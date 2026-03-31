@@ -66,6 +66,21 @@ jobs:
       - name: Install dependencies
         run: ${{ steps.detect-package-manager.outputs.manager }} ${{ steps.detect-package-manager.outputs.command }}
         working-directory: ${{ env.BUILD_PATH }}
+      - name: Validate secrets
+        run: |
+          missing=""
+          if [ -z "$PUBLIC_KE_AR_API_KEY" ]; then missing="$missing PUBLIC_KE_AR_API_KEY"; fi
+          if [ -z "$PUBLIC_KE_AR_API_URL" ]; then missing="$missing PUBLIC_KE_AR_API_URL"; fi
+          if [ -z "$PASSWORD" ]; then missing="$missing PASSWORD"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            exit 1
+          fi
+          echo "✓ All required secrets are set"
+        env:
+          PUBLIC_KE_AR_API_KEY: ${{ secrets.PUBLIC_KE_AR_API_KEY }}
+          PUBLIC_KE_AR_API_URL: ${{ secrets.PUBLIC_KE_AR_API_URL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
       - name: Build with Astro
         run: |
           ${{ steps.detect-package-manager.outputs.runner }} astro build \
