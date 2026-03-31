@@ -1,0 +1,1085 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+const base = import.meta.env.BASE_URL;
+---
+
+<BaseLayout title="[KE-AR] - Sessions">
+  <section id="login-view" class="login-view hidden">
+    <div class="login-card">
+      <h2 class="login-title">Sessions Access</h2>
+      <p class="login-desc">Enter the password to access recorded sessions.</p>
+      <div class="login-form">
+        <input
+          type="password"
+          id="pw-input"
+          placeholder="Password"
+          autocomplete="off"
+          aria-label="Session access password"
+          class="login-input"
+        />
+        <button id="pw-submit" class="btn btn-primary">Unlock</button>
+      </div>
+      <p id="pw-error" class="login-error hidden">Invalid password. Please try again.</p>
+    </div>
+  </section>
+
+  <section id="dashboard-view" class="dashboard hidden">
+    <div id="list-view">
+      <div class="dash-toolbar">
+        <h2 class="section-title">Recorded Sessions</h2>
+        <div class="dash-toolbar-actions">
+          <button id="btn-refresh" class="btn-icon-action" title="Refresh">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+          </button>
+          <button id="btn-logout" class="btn btn-ghost">Logout</button>
+        </div>
+      </div>
+
+      <div class="upload-card">
+        <p class="upload-hint">Select session files to upload. Upload starts automatically.</p>
+        <div class="upload-row">
+          <input type="file" id="upload-files" multiple class="upload-input" />
+        </div>
+        <div id="upload-file-list" class="upload-file-list hidden"></div>
+        <p id="upload-status" class="upload-status hidden"></p>
+      </div>
+
+      <div id="sessions-list-wrap" class="sessions-list-wrap">
+        <div id="sessions-loading" class="status-msg">
+          <span class="spinner"></span> Loading sessions…
+        </div>
+        <p id="sessions-empty" class="status-msg hidden">No sessions found.</p>
+        <div id="sessions-list" class="sessions-list hidden"></div>
+        <div id="pagination" class="pagination hidden">
+          <button id="pg-prev" class="btn btn-secondary btn-sm" disabled>← Prev</button>
+          <span id="pg-info" class="pg-info"></span>
+          <button id="pg-next" class="btn btn-secondary btn-sm">Next →</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="detail-view" class="hidden">
+      <div class="dash-toolbar">
+        <div class="detail-nav">
+          <a id="btn-back" class="btn btn-secondary btn-sm" href={`${base}sessions/`}>← Sessions</a>
+          <h2 id="detail-title" class="detail-title"></h2>
+        </div>
+        <div class="dash-toolbar-actions">
+          <button id="btn-delete-session" class="btn-icon-action btn-icon-delete" title="Delete session">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+          </button>
+          <button id="btn-logout-detail" class="btn btn-ghost">Logout</button>
+        </div>
+      </div>
+
+      <div id="detail-meta" class="detail-meta-grid"></div>
+      <div id="detail-loading" class="status-msg">
+        <span class="spinner"></span> Loading session…
+      </div>
+      <div id="detail-files" class="detail-files hidden"></div>
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  import {
+    verifyPassword,
+    getSessions,
+    getSession,
+    uploadSession,
+    deleteSession,
+    downloadFile,
+  } from "../../lib/api";
+  import type { FileUploadState } from "../../lib/api";
+  import { isAuthenticated, setAuthenticated, logout } from "../../lib/auth";
+
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+  const BLOCK_TOTAL = 30;
+  const BLOCK_FILLED = "█";
+  const BLOCK_EMPTY = "░";
+
+  const loginView = document.getElementById("login-view") as HTMLElement;
+  const dashView = document.getElementById("dashboard-view") as HTMLElement;
+  const pwInput = document.getElementById("pw-input") as HTMLInputElement;
+  const pwSubmit = document.getElementById("pw-submit") as HTMLButtonElement;
+  const pwError = document.getElementById("pw-error") as HTMLElement;
+
+  const listView = document.getElementById("list-view") as HTMLElement;
+  const detailView = document.getElementById("detail-view") as HTMLElement;
+
+  const uploadFilesInput = document.getElementById("upload-files") as HTMLInputElement;
+  const uploadFileList = document.getElementById("upload-file-list") as HTMLElement;
+  const uploadStatus = document.getElementById("upload-status") as HTMLElement;
+  const refreshBtn = document.getElementById("btn-refresh") as HTMLButtonElement;
+  const logoutBtn = document.getElementById("btn-logout") as HTMLButtonElement;
+  const logoutBtnDetail = document.getElementById("btn-logout-detail") as HTMLButtonElement;
+
+  const sessionsLoading = document.getElementById("sessions-loading") as HTMLElement;
+  const sessionsEmpty = document.getElementById("sessions-empty") as HTMLElement;
+  const sessionsList = document.getElementById("sessions-list") as HTMLElement;
+  const pagination = document.getElementById("pagination") as HTMLElement;
+  const pgPrev = document.getElementById("pg-prev") as HTMLButtonElement;
+  const pgNext = document.getElementById("pg-next") as HTMLButtonElement;
+  const pgInfo = document.getElementById("pg-info") as HTMLElement;
+
+  const detailTitle = document.getElementById("detail-title") as HTMLElement;
+  const detailMeta = document.getElementById("detail-meta") as HTMLElement;
+  const detailLoading = document.getElementById("detail-loading") as HTMLElement;
+  const detailFiles = document.getElementById("detail-files") as HTMLElement;
+  const btnBack = document.getElementById("btn-back") as HTMLAnchorElement;
+  const btnDeleteSession = document.getElementById("btn-delete-session") as HTMLButtonElement;
+
+  const PAGE_SIZE = 12;
+  let currentOffset = 0;
+  let totalSessions = 0;
+  let isUploading = false;
+
+  function getSessionIdFromUrl(): string | null {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("id");
+  }
+
+  function showLogin() {
+    loginView.classList.remove("hidden");
+    dashView.classList.add("hidden");
+  }
+
+  function showDashboard() {
+    loginView.classList.add("hidden");
+    dashView.classList.remove("hidden");
+
+    const sid = getSessionIdFromUrl();
+    if (sid) {
+      showDetailView(sid);
+    } else {
+      showListView();
+    }
+  }
+
+  function showListView() {
+    listView.classList.remove("hidden");
+    detailView.classList.add("hidden");
+    loadSessions();
+  }
+
+  function showDetailView(sessionId: string) {
+    listView.classList.add("hidden");
+    detailView.classList.remove("hidden");
+    loadDetail(sessionId);
+  }
+
+  function navigateTo(url: string) {
+    history.pushState(null, "", url);
+    const sid = getSessionIdFromUrl();
+    if (sid) {
+      showDetailView(sid);
+    } else {
+      showListView();
+    }
+  }
+
+  window.addEventListener("popstate", () => {
+    if (!isAuthenticated()) { showLogin(); return; }
+    const sid = getSessionIdFromUrl();
+    if (sid) {
+      showDetailView(sid);
+    } else {
+      showListView();
+    }
+  });
+
+  function resetUploadUI() {
+    uploadFilesInput.value = "";
+    uploadFileList.classList.add("hidden");
+    uploadFileList.innerHTML = "";
+    uploadStatus.classList.add("hidden");
+    uploadStatus.textContent = "";
+  }
+
+  function buildBlockBar(percent: number): string {
+    const filled = Math.round((percent / 100) * BLOCK_TOTAL);
+    return BLOCK_FILLED.repeat(filled) + BLOCK_EMPTY.repeat(BLOCK_TOTAL - filled);
+  }
+
+  function renderFileProgress(states: FileUploadState[]) {
+    uploadFileList.classList.remove("hidden");
+    uploadFileList.innerHTML = "";
+    for (const s of states) {
+      const row = document.createElement("div");
+      row.className = `upload-file-item upload-file-${s.status}`;
+      row.innerHTML = `
+        <div class="upload-file-header">
+          <span class="upload-file-name">${escapeHtml(s.name)}</span>
+          <span class="upload-file-meta">${formatSize(s.size)} · ${s.status === "error" ? s.error : s.percent + "%"}</span>
+        </div>
+        <div class="upload-file-bar">${buildBlockBar(s.percent)}</div>
+      `;
+      uploadFileList.appendChild(row);
+    }
+  }
+
+  if (isAuthenticated()) {
+    showDashboard();
+  } else {
+    showLogin();
+  }
+
+  pwSubmit.addEventListener("click", doLogin);
+  pwInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") doLogin();
+  });
+
+  async function doLogin() {
+    pwError.classList.add("hidden");
+    pwSubmit.disabled = true;
+    pwSubmit.textContent = "Checking…";
+    try {
+      const ok = await verifyPassword(pwInput.value);
+      if (ok) {
+        setAuthenticated();
+        showDashboard();
+      } else {
+        pwError.textContent = "Invalid password. Please try again.";
+        pwError.classList.remove("hidden");
+      }
+    } catch (err) {
+      console.error("Login error:", err);
+      pwError.textContent = "Connection error. Please try again.";
+      pwError.classList.remove("hidden");
+    } finally {
+      pwSubmit.disabled = false;
+      pwSubmit.textContent = "Unlock";
+    }
+  }
+
+  function doLogout() {
+    logout();
+    showLogin();
+    pwInput.value = "";
+    history.replaceState(null, "", `${BASE}/sessions/`);
+  }
+
+  logoutBtn.addEventListener("click", doLogout);
+  logoutBtnDetail.addEventListener("click", doLogout);
+
+  async function loadSessions() {
+    sessionsLoading.classList.remove("hidden");
+    sessionsEmpty.classList.add("hidden");
+    sessionsList.classList.add("hidden");
+    pagination.classList.add("hidden");
+
+    try {
+      const data = await getSessions(PAGE_SIZE, currentOffset);
+      const sessions = data.sessions ?? [];
+      totalSessions = data.total ?? sessions.length;
+
+      sessionsLoading.classList.add("hidden");
+
+      if (sessions.length === 0) {
+        sessionsEmpty.classList.remove("hidden");
+        return;
+      }
+
+      sessionsList.innerHTML = "";
+      for (const s of sessions) {
+        console.log("Session data:", JSON.stringify(s));
+        const card = document.createElement("a");
+        card.className = "session-card";
+        card.href = `${BASE}/sessions/?id=${encodeURIComponent(s.session_id)}`;
+
+        const startTime = s.start_time ?? (s as any).startTime ?? null;
+        const headsetType = s.headset_type ?? (s as any).headsetType ?? null;
+        const uploadedAt = s.uploaded_at ?? (s as any).uploadedAt ?? null;
+        const fileCount = s.file_count ?? (s as any).fileCount ?? null;
+        const totalSize = s.total_size_bytes ?? (s as any).totalSizeBytes ?? null;
+
+        const metaParts: string[] = [];
+        if (startTime) metaParts.push(`Recorded ${formatDate(startTime)}`);
+        if (headsetType) metaParts.push(headsetType);
+        if (fileCount != null) metaParts.push(`${fileCount} file(s)`);
+        if (totalSize != null) metaParts.push(formatSize(totalSize));
+        if (uploadedAt) metaParts.push(`Created ${formatDate(uploadedAt)}`);
+
+        card.innerHTML = `
+          <div class="session-card-info">
+            <span class="session-id">${escapeHtml(s.session_id)}</span>
+            ${metaParts.length ? `<span class="session-meta">${metaParts.join("  ·  ")}</span>` : ""}
+          </div>
+          <div class="session-card-actions">
+            <button class="btn-icon-action btn-icon-delete" data-del="${escapeHtml(s.session_id)}" title="Delete session">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+              </svg>
+            </button>
+            <span class="session-chevron">›</span>
+          </div>
+        `;
+
+        card.addEventListener("click", (e) => {
+          const delBtn = (e.target as HTMLElement).closest("[data-del]");
+          if (delBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            confirmDelete(delBtn.getAttribute("data-del")!);
+            return;
+          }
+          e.preventDefault();
+          navigateTo(`${BASE}/sessions/?id=${encodeURIComponent(s.session_id)}`);
+        });
+
+        sessionsList.appendChild(card);
+      }
+
+      sessionsList.classList.remove("hidden");
+
+      if (totalSessions > PAGE_SIZE) {
+        pagination.classList.remove("hidden");
+        const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+        const pages = Math.ceil(totalSessions / PAGE_SIZE);
+        pgInfo.textContent = `Page ${page} / ${pages}`;
+        pgPrev.disabled = currentOffset === 0;
+        pgNext.disabled = currentOffset + PAGE_SIZE >= totalSessions;
+      }
+    } catch (err) {
+      sessionsLoading.classList.add("hidden");
+      sessionsEmpty.textContent = `Error: ${(err as Error).message}`;
+      sessionsEmpty.classList.remove("hidden");
+    }
+  }
+
+  async function loadDetail(id: string) {
+    detailTitle.textContent = id;
+    detailMeta.innerHTML = "";
+    detailLoading.classList.remove("hidden");
+    detailFiles.classList.add("hidden");
+    detailFiles.innerHTML = "";
+
+    try {
+      const s = await getSession(id);
+      const files = s.files ?? [];
+
+      const startTime = s.start_time ?? (s as any).startTime ?? null;
+      const headsetType = s.headset_type ?? (s as any).headsetType ?? null;
+      const uploadedAt = s.uploaded_at ?? (s as any).uploadedAt ?? null;
+      const fileCount = s.file_count ?? (s as any).fileCount ?? null;
+      const totalSize = s.total_size_bytes ?? (s as any).totalSizeBytes ?? null;
+
+      const metaItems: { label: string; value: string }[] = [];
+      if (startTime) metaItems.push({ label: "Recorded", value: formatDate(startTime) });
+      if (headsetType) metaItems.push({ label: "Headset", value: headsetType });
+      if (uploadedAt) metaItems.push({ label: "Created", value: formatDate(uploadedAt) });
+      if (fileCount != null) metaItems.push({ label: "Files", value: `${fileCount}` });
+      if (totalSize != null) metaItems.push({ label: "Total Size", value: formatSize(totalSize) });
+
+      detailMeta.innerHTML = metaItems
+        .map((m) => `<div class="meta-item"><span class="meta-label">${escapeHtml(m.label)}</span><span class="meta-value">${escapeHtml(m.value)}</span></div>`)
+        .join("");
+
+      detailLoading.classList.add("hidden");
+
+      if (files.length === 0) {
+        detailFiles.innerHTML = `<p class="status-msg">No files in this session.</p>`;
+        detailFiles.classList.remove("hidden");
+        return;
+      }
+
+      detailFiles.innerHTML = "";
+      for (const f of files) {
+        const row = document.createElement("div");
+        row.className = "file-row";
+        row.innerHTML = `
+          <span class="file-name">${escapeHtml(f.filename)}</span>
+          ${f.size_bytes != null ? `<span class="file-size">${formatSize(f.size_bytes)}</span>` : ""}
+          <button class="btn-icon-action btn-icon-download" data-dl="${escapeHtml(f.filename)}" title="Download">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+          </button>
+        `;
+        row.querySelector("[data-dl]")!.addEventListener("click", async (e) => {
+          const btn = e.currentTarget as HTMLButtonElement;
+          btn.classList.add("btn-loading");
+          btn.innerHTML = `<span class="spinner spinner-sm"></span>`;
+          try {
+            const blob = await downloadFile(id, f.filename);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = f.filename;
+            a.click();
+            URL.revokeObjectURL(url);
+            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+            setTimeout(() => {
+              btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+              btn.classList.remove("btn-loading");
+            }, 2000);
+          } catch (err) {
+            alert(`Download failed: ${(err as Error).message}`);
+            btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
+            btn.classList.remove("btn-loading");
+          }
+        });
+        detailFiles.appendChild(row);
+      }
+      detailFiles.classList.remove("hidden");
+    } catch (err) {
+      detailLoading.classList.add("hidden");
+      detailFiles.innerHTML = `<p class="status-msg" style="color:var(--color-danger)">Error: ${escapeHtml((err as Error).message)}</p>`;
+      detailFiles.classList.remove("hidden");
+    }
+  }
+
+  btnBack.addEventListener("click", (e) => {
+    e.preventDefault();
+    navigateTo(`${BASE}/sessions/`);
+  });
+
+  btnDeleteSession.addEventListener("click", () => {
+    const sid = getSessionIdFromUrl();
+    if (sid) confirmDelete(sid, true);
+  });
+
+  pgPrev.addEventListener("click", () => {
+    currentOffset = Math.max(0, currentOffset - PAGE_SIZE);
+    loadSessions();
+  });
+
+  pgNext.addEventListener("click", () => {
+    currentOffset += PAGE_SIZE;
+    loadSessions();
+  });
+
+  refreshBtn.addEventListener("click", () => {
+    currentOffset = 0;
+    loadSessions();
+  });
+
+  async function confirmDelete(id: string, goBack = false) {
+    if (!confirm(`Delete session "${id}"?\nThis cannot be undone.`)) return;
+    try {
+      await deleteSession(id);
+      if (goBack) {
+        navigateTo(`${BASE}/sessions/`);
+      } else {
+        loadSessions();
+      }
+    } catch (err) {
+      alert(`Delete failed: ${(err as Error).message}`);
+    }
+  }
+
+
+  uploadFilesInput.addEventListener("change", () => {
+    const files = Array.from(uploadFilesInput.files ?? []);
+    if (!files.length || isUploading) return;
+    startUpload(files);
+  });
+
+  async function startUpload(files: File[]) {
+    isUploading = true;
+    uploadFilesInput.disabled = true;
+    uploadStatus.classList.add("hidden");
+
+    try {
+      await uploadSession(files, renderFileProgress);
+      uploadStatus.textContent = "Upload successful!";
+      uploadStatus.className = "upload-status success";
+      uploadStatus.classList.remove("hidden");
+
+      setTimeout(() => {
+        resetUploadUI();
+        loadSessions();
+      }, 1500);
+    } catch (err) {
+      uploadStatus.textContent = `Upload failed: ${(err as Error).message}`;
+      uploadStatus.className = "upload-status error";
+      uploadStatus.classList.remove("hidden");
+    } finally {
+      isUploading = false;
+      uploadFilesInput.disabled = false;
+    }
+  }
+
+  function escapeHtml(str: string): string {
+    const d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function formatDate(iso: string): string {
+    try {
+      return new Date(iso).toLocaleString();
+    } catch {
+      return iso;
+    }
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+</script>
+
+<style>
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--color-border);
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+
+  .spinner-sm {
+    width: 14px;
+    height: 14px;
+    border-width: 1.5px;
+  }
+
+  .login-view {
+    display: flex;
+    justify-content: center;
+    padding-top: 4rem;
+  }
+
+  .login-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 2.5rem 2rem;
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    text-align: center;
+    animation: fadeIn 0.3s ease;
+  }
+
+  .login-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .login-desc {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+  }
+
+  .login-form {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .login-input {
+    flex: 1;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    font-size: 0.95rem;
+    padding: 0.7rem 1rem;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .login-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(109, 93, 252, 0.15);
+  }
+
+  .login-error {
+    color: var(--color-danger);
+    font-size: 0.85rem;
+  }
+
+  .dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    animation: fadeIn 0.3s ease;
+  }
+
+  .dash-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .dash-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .section-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .detail-nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+  }
+
+  .detail-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: monospace;
+    word-break: break-all;
+    letter-spacing: -0.02em;
+    color: var(--color-text);
+  }
+
+  :global(.detail-meta-grid) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 1rem 1.25rem;
+  }
+
+  :global(.meta-item) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  :global(.meta-label) {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-muted);
+  }
+
+  :global(.meta-value) {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .sessions-list-wrap {
+    margin-top: 0.5rem;
+  }
+
+  .upload-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .upload-hint {
+    font-size: 0.9rem;
+    color: var(--color-text-muted);
+  }
+
+  .upload-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .upload-input {
+    flex: 1;
+    font-size: 0.85rem;
+    color: var(--color-text);
+  }
+
+  .upload-input::file-selector-button {
+    background: var(--color-surface-hover);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    padding: 0.4rem 0.8rem;
+    font-family: inherit;
+    cursor: pointer;
+    margin-right: 0.75rem;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .upload-input::file-selector-button:hover {
+    background: var(--color-border);
+    border-color: var(--color-text-muted);
+  }
+
+  .upload-file-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    animation: fadeIn 0.2s ease;
+  }
+
+  :global(.upload-file-item) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.45rem 0.7rem;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    font-size: 0.8rem;
+    transition: border-color 0.2s ease;
+  }
+
+  :global(.upload-file-header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  :global(.upload-file-name) {
+    font-weight: 600;
+    word-break: break-all;
+  }
+
+  :global(.upload-file-meta) {
+    color: var(--color-text-muted);
+    font-size: 0.7rem;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.upload-file-bar) {
+    font-family: monospace;
+    font-size: 0.65rem;
+    letter-spacing: 0.5px;
+    line-height: 1;
+    user-select: none;
+    color: var(--color-text-muted);
+    transition: color 0.2s ease;
+  }
+
+  :global(.upload-file-pending) { opacity: 0.5; }
+  :global(.upload-file-uploading) { border-color: var(--color-text-muted); }
+  :global(.upload-file-uploading .upload-file-bar) { color: var(--color-text); }
+  :global(.upload-file-done) { border-color: #22c55e; }
+  :global(.upload-file-done .upload-file-bar) { color: #22c55e; }
+  :global(.upload-file-done .upload-file-meta) { color: #22c55e; }
+  :global(.upload-file-error) { border-color: var(--color-danger); }
+  :global(.upload-file-error .upload-file-bar) { color: var(--color-danger); }
+  :global(.upload-file-error .upload-file-meta) { color: var(--color-danger); }
+
+  .upload-status { font-size: 0.85rem; font-weight: 600; }
+  .upload-status.success { color: #22c55e; }
+  .upload-status.error { color: var(--color-danger); }
+
+  .status-msg {
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    padding: 1rem 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .sessions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  :global(.session-card) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1.25rem;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    flex-wrap: wrap;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+    animation: fadeIn 0.25s ease both;
+  }
+
+  :global(.session-card:hover) {
+    border-color: var(--color-primary);
+    box-shadow: 0 4px 12px rgba(109, 93, 252, 0.1);
+    transform: translateY(-1px);
+  }
+
+  :global(.session-card-info) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  :global(.session-id) {
+    font-weight: 600;
+    font-size: 0.85rem;
+    word-break: break-all;
+    font-family: monospace;
+    letter-spacing: -0.02em;
+  }
+
+  :global(.session-meta) {
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+  }
+
+  :global(.session-card-actions) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  :global(.session-chevron) {
+    font-size: 1.2rem;
+    color: var(--color-text-muted);
+    line-height: 1;
+    transition: transform 0.2s ease;
+  }
+
+  :global(.session-card:hover .session-chevron) {
+    color: var(--color-primary);
+    transform: translateX(2px);
+  }
+
+  :global(.btn-icon-action) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  }
+
+  :global(.btn-icon-action:hover) {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+    border-color: var(--color-text-muted);
+  }
+
+  :global(.btn-icon-action:active) {
+    transform: scale(0.93);
+  }
+
+  :global(.btn-icon-delete:hover) {
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  :global(.btn-icon-download:hover) {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+    background: rgba(109, 93, 252, 0.08);
+  }
+
+  :global(.detail-files) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  :global(.file-row) {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 1rem;
+    flex-wrap: wrap;
+    transition: border-color 0.2s ease, background 0.2s ease;
+  }
+
+  :global(.file-row:hover) {
+    border-color: var(--color-text-muted);
+    background: var(--color-surface-hover);
+  }
+
+  :global(.file-name) {
+    font-weight: 600;
+    font-size: 0.85rem;
+    word-break: break-all;
+    flex: 1;
+  }
+
+  :global(.file-size) {
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding-top: 1rem;
+  }
+
+  .pg-info {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.7rem 1.4rem;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease,
+      box-shadow 0.2s ease, border-color 0.2s ease;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  .btn-sm {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.78rem;
+  }
+
+  .btn-primary {
+    background: var(--color-primary);
+    color: #fff;
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-primary-hover);
+    box-shadow: 0 4px 14px rgba(109, 93, 252, 0.25);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .btn-secondary {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+    border-color: var(--color-text-muted);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .btn-ghost {
+    background: none;
+    color: var(--color-text-muted);
+    border: none;
+    padding: 0.7rem 1rem;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+
+  .btn-ghost:hover {
+    color: var(--color-text);
+    background: var(--color-surface-hover);
+  }
+
+  :global(.btn-loading) {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+
+  :global(.btn-download) {
+    min-width: 5.5rem;
+    text-align: center;
+  }
+
+  .hidden {
+    display: none !important;
+  }
+
+  @media (max-width: 600px) {
+    .dash-toolbar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .detail-nav {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    :global(.session-card) {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    :global(.session-card-actions) {
+      justify-content: flex-end;
+    }
+
+    :global(.file-row) {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+</style>
+

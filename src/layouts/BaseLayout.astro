@@ -22,8 +22,12 @@ const { title } = Astro.props;
   <body>
     <header class="site-header">
       <div class="header-inner">
-        <a href="/ke-ar/" class="logo">KE-AR</a>
+        <a href="/ke-ar/" class="logo">[KE-AR]</a>
         <span class="tagline">Playground</span>
+        <nav class="header-nav">
+          <a href="/ke-ar/" class="nav-link">Marker Generation</a>
+          <a href="/ke-ar/sessions/" class="nav-link">Sessions</a>
+        </nav>
       </div>
     </header>
 
@@ -32,7 +36,7 @@ const { title } = Astro.props;
     </main>
 
     <footer class="site-footer">
-      <p>&copy; {new Date().getFullYear()} KE-AR</p>
+      <p>&copy; {new Date().getFullYear()} Jonas Ludorf</p>
     </footer>
   </body>
 </html>
@@ -51,6 +55,27 @@ const { title } = Astro.props;
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .header-nav {
+    margin-left: auto;
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .nav-link {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    font-weight: 500;
+    padding: 0.35rem 0.75rem;
+    border-radius: var(--radius-sm);
+    transition: color var(--transition), background var(--transition);
+  }
+
+  .nav-link:hover {
+    color: var(--color-text);
+    background: var(--color-surface-hover);
   }
 
   .logo {
