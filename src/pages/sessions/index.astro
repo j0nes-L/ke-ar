@@ -82,24 +82,107 @@ const base = import.meta.env.BASE_URL;
       </div>
 
       <div id="detail-meta" class="detail-meta-grid"></div>
+
+      <details id="detail-meta-advanced" class="detail-meta-advanced hidden">
+        <summary class="detail-meta-summary">Technical Details</summary>
+        <div id="detail-meta-advanced-content" class="detail-meta-advanced-content"></div>
+      </details>
+
       <div id="detail-loading" class="status-msg">
         <span class="spinner"></span> Loading session…
       </div>
       <div id="detail-files" class="detail-files hidden"></div>
+
+      <div id="extraction-section" class="extraction-section hidden">
+        <div class="extraction-header">
+          <h3 class="extraction-title">Image Extraction</h3>
+          <button id="btn-extract" class="btn btn-primary btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+              <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+            Extract Images
+          </button>
+        </div>
+        <p id="extract-info" class="extraction-info hidden"></p>
+        <div id="extract-progress-wrap" class="extract-progress-wrap hidden">
+          <div class="extract-progress-header">
+            <span id="extract-progress-label">Extracting…</span>
+            <span id="extract-progress-pct">0%</span>
+          </div>
+          <div id="extract-progress-bar" class="extract-progress-bar"></div>
+        </div>
+        <p id="extract-error" class="extraction-error hidden"></p>
+      </div>
+
+      <div id="image-gallery" class="image-gallery hidden">
+        <div class="gallery-header">
+          <h3 class="gallery-title">Session Images</h3>
+          <div class="gallery-tabs">
+            <button class="gallery-tab active" data-tab="color">Color</button>
+            <button class="gallery-tab" data-tab="depth">Depth</button>
+          </div>
+        </div>
+        <div class="viewer-wrap">
+          <button id="viewer-prev" class="viewer-nav viewer-prev" title="Previous frame">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+          </button>
+          <div id="viewer-main" class="viewer-main">
+            <div id="viewer-loading" class="viewer-loading hidden"><span class="spinner"></span></div>
+            <img id="viewer-img" class="viewer-img" alt="" />
+            <p id="viewer-empty" class="viewer-empty hidden">No images available.</p>
+          </div>
+          <button id="viewer-next" class="viewer-nav viewer-next" title="Next frame">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+          </button>
+        </div>
+        <div class="viewer-footer">
+          <span id="viewer-frame-info" class="viewer-frame-info"></span>
+          <button id="viewer-meta-btn" class="btn btn-secondary btn-sm">Metadata</button>
+        </div>
+        <div id="viewer-strip" class="viewer-strip"></div>
+      </div>
+
+      <div id="frame-meta-overlay" class="frame-meta-overlay hidden">
+        <div class="frame-meta-dialog">
+          <div class="frame-meta-header">
+            <h3 id="frame-meta-title" class="frame-meta-title">Frame</h3>
+            <button id="frame-meta-close" class="btn-icon-action" title="Close">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div id="frame-meta-content" class="frame-meta-content"></div>
+        </div>
+      </div>
     </div>
   </section>
 </BaseLayout>
 
 <script>
   import {
+    API_KEY,
     verifyPassword,
     getSessions,
     getSession,
     uploadSession,
     deleteSession,
     downloadFile,
+    getSessionImageMetadata,
+    checkBin,
+    extractImages,
+    getExtractionStreamUrl,
+    getExtractionProgress,
+    getImageStatus,
+    getFramesPaginated,
+    getFrameMetadata,
+    getColorImageUrl,
+    getDepthImageUrl,
   } from "../../lib/api";
-  import type { FileUploadState } from "../../lib/api";
+  import type { FileUploadState, FrameSummary, SessionImageMetadata } from "../../lib/api";
   import { isAuthenticated, setAuthenticated, logout } from "../../lib/auth";
 
   const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -134,15 +217,50 @@ const base = import.meta.env.BASE_URL;
 
   const detailTitle = document.getElementById("detail-title") as HTMLElement;
   const detailMeta = document.getElementById("detail-meta") as HTMLElement;
+  const detailMetaAdvanced = document.getElementById("detail-meta-advanced") as HTMLDetailsElement;
+  const detailMetaAdvancedContent = document.getElementById("detail-meta-advanced-content") as HTMLElement;
   const detailLoading = document.getElementById("detail-loading") as HTMLElement;
   const detailFiles = document.getElementById("detail-files") as HTMLElement;
   const btnBack = document.getElementById("btn-back") as HTMLAnchorElement;
   const btnDeleteSession = document.getElementById("btn-delete-session") as HTMLButtonElement;
 
+  const extractionSection = document.getElementById("extraction-section") as HTMLElement;
+  const btnExtract = document.getElementById("btn-extract") as HTMLButtonElement;
+  const extractInfo = document.getElementById("extract-info") as HTMLElement;
+  const extractProgressWrap = document.getElementById("extract-progress-wrap") as HTMLElement;
+  const extractProgressLabel = document.getElementById("extract-progress-label") as HTMLElement;
+  const extractProgressPct = document.getElementById("extract-progress-pct") as HTMLElement;
+  const extractProgressBar = document.getElementById("extract-progress-bar") as HTMLElement;
+  const extractError = document.getElementById("extract-error") as HTMLElement;
+
+  const imageGallery = document.getElementById("image-gallery") as HTMLElement;
+  const galleryTabs = document.querySelectorAll(".gallery-tab") as NodeListOf<HTMLButtonElement>;
+  const viewerImg = document.getElementById("viewer-img") as HTMLImageElement;
+  const viewerLoading = document.getElementById("viewer-loading") as HTMLElement;
+  const viewerEmpty = document.getElementById("viewer-empty") as HTMLElement;
+  const viewerPrev = document.getElementById("viewer-prev") as HTMLButtonElement;
+  const viewerNext = document.getElementById("viewer-next") as HTMLButtonElement;
+  const viewerFrameInfo = document.getElementById("viewer-frame-info") as HTMLElement;
+  const viewerMetaBtn = document.getElementById("viewer-meta-btn") as HTMLButtonElement;
+  const viewerStrip = document.getElementById("viewer-strip") as HTMLElement;
+
+  const frameMetaOverlay = document.getElementById("frame-meta-overlay") as HTMLElement;
+  const frameMetaTitle = document.getElementById("frame-meta-title") as HTMLElement;
+  const frameMetaContent = document.getElementById("frame-meta-content") as HTMLElement;
+  const frameMetaClose = document.getElementById("frame-meta-close") as HTMLButtonElement;
+
   const PAGE_SIZE = 12;
   let currentOffset = 0;
   let totalSessions = 0;
   let isUploading = false;
+
+  let galleryTab: "color" | "depth" = "color";
+  let gallerySessionId = "";
+  let galleryFrames: FrameSummary[] = [];
+  let galleryCurrentIdx = 0;
+  let extractionEventSource: EventSource | null = null;
+  const blobCache = new Map<string, string>();
+  const audioBlobCache = new Map<string, string>();
 
   function getSessionIdFromUrl(): string | null {
     const params = new URLSearchParams(window.location.search);
@@ -169,6 +287,7 @@ const base = import.meta.env.BASE_URL;
   function showListView() {
     listView.classList.remove("hidden");
     detailView.classList.add("hidden");
+    cleanupSessionData();
     loadSessions();
   }
 
@@ -292,7 +411,6 @@ const base = import.meta.env.BASE_URL;
 
       sessionsList.innerHTML = "";
       for (const s of sessions) {
-        console.log("Session data:", JSON.stringify(s));
         const card = document.createElement("a");
         card.className = "session-card";
         card.href = `${BASE}/sessions/?id=${encodeURIComponent(s.session_id)}`;
@@ -363,6 +481,8 @@ const base = import.meta.env.BASE_URL;
   async function loadDetail(id: string) {
     detailTitle.textContent = id;
     detailMeta.innerHTML = "";
+    detailMetaAdvanced.classList.add("hidden");
+    detailMetaAdvancedContent.innerHTML = "";
     detailLoading.classList.remove("hidden");
     detailFiles.classList.add("hidden");
     detailFiles.innerHTML = "";
@@ -371,36 +491,95 @@ const base = import.meta.env.BASE_URL;
       const s = await getSession(id);
       const files = s.files ?? [];
 
-      const startTime = s.start_time ?? (s as any).startTime ?? null;
-      const headsetType = s.headset_type ?? (s as any).headsetType ?? null;
+      let imgMeta: SessionImageMetadata | null = null;
+      try {
+        imgMeta = await getSessionImageMetadata(id);
+      } catch {
+      }
+
+      const metaItems: { label: string; value: string }[] = [];
+
+      const headsetType = imgMeta?.headsetType ?? s.headset_type ?? (s as any).headsetType ?? null;
+      const startTime = imgMeta?.startTime ?? s.start_time ?? (s as any).startTime ?? null;
       const uploadedAt = s.uploaded_at ?? (s as any).uploadedAt ?? null;
       const fileCount = s.file_count ?? (s as any).fileCount ?? null;
       const totalSize = s.total_size_bytes ?? (s as any).totalSizeBytes ?? null;
+      const visualFrames = imgMeta?.totalVisualFrames ?? null;
+      const trackingFrames = imgMeta?.totalTrackingFrames ?? null;
 
-      const metaItems: { label: string; value: string }[] = [];
-      if (startTime) metaItems.push({ label: "Recorded", value: formatDate(startTime) });
-      if (headsetType) metaItems.push({ label: "Headset", value: headsetType });
-      if (uploadedAt) metaItems.push({ label: "Created", value: formatDate(uploadedAt) });
+      if (headsetType) metaItems.push({ label: "Headset", value: String(headsetType) });
+      if (startTime) metaItems.push({ label: "Recorded", value: formatDate(String(startTime)) });
+      if (visualFrames != null) metaItems.push({ label: "Visual Frames", value: `${visualFrames}` });
+      if (trackingFrames != null) metaItems.push({ label: "Tracking Frames", value: `${trackingFrames}` });
+      if (uploadedAt) metaItems.push({ label: "Uploaded", value: formatDate(uploadedAt) });
       if (fileCount != null) metaItems.push({ label: "Files", value: `${fileCount}` });
       if (totalSize != null) metaItems.push({ label: "Total Size", value: formatSize(totalSize) });
+
+      const caps: string[] = [];
+      if (imgMeta?.cameraAccessSupported) caps.push("Camera");
+      if (imgMeta?.depthSupported) caps.push("Depth");
+      if (imgMeta?.raycastSupported) caps.push("Raycast");
+      if (caps.length) metaItems.push({ label: "Capabilities", value: caps.join(", ") });
 
       detailMeta.innerHTML = metaItems
         .map((m) => `<div class="meta-item"><span class="meta-label">${escapeHtml(m.label)}</span><span class="meta-value">${escapeHtml(m.value)}</span></div>`)
         .join("");
+
+      if (imgMeta) {
+        const advancedHtml: string[] = [];
+
+        if (imgMeta.visualInfo && typeof imgMeta.visualInfo === "object") {
+          advancedHtml.push(`<h4 class="adv-section-title">Visual Info</h4>`);
+          advancedHtml.push(renderAdvancedTable(imgMeta.visualInfo as Record<string, unknown>));
+        }
+        if (imgMeta.trackingInfo && typeof imgMeta.trackingInfo === "object") {
+          advancedHtml.push(`<h4 class="adv-section-title">Tracking Info</h4>`);
+          advancedHtml.push(renderAdvancedTable(imgMeta.trackingInfo as Record<string, unknown>));
+        }
+
+        const shownKeys = new Set([
+          "headsetType", "startTime", "cameraAccessSupported",
+          "depthSupported", "raycastSupported", "visualInfo",
+          "trackingInfo", "totalVisualFrames", "totalTrackingFrames",
+        ]);
+        const extra = Object.entries(imgMeta).filter(([k]) => !shownKeys.has(k));
+        if (extra.length) {
+          advancedHtml.push(`<h4 class="adv-section-title">Other</h4>`);
+          advancedHtml.push(renderAdvancedTable(Object.fromEntries(extra)));
+        }
+
+        if (advancedHtml.length) {
+          detailMetaAdvancedContent.innerHTML = advancedHtml.join("");
+          detailMetaAdvanced.classList.remove("hidden");
+        }
+      }
 
       detailLoading.classList.add("hidden");
 
       if (files.length === 0) {
         detailFiles.innerHTML = `<p class="status-msg">No files in this session.</p>`;
         detailFiles.classList.remove("hidden");
+        initExtraction(id, imgMeta);
         return;
       }
 
       detailFiles.innerHTML = "";
+      const audioExts = [".wav", ".mp3", ".ogg", ".flac", ".m4a"];
+      const jsonExt = ".json";
+
       for (const f of files) {
+        const lname = f.filename.toLowerCase();
+        const isAudio = audioExts.some(ext => lname.endsWith(ext));
+        const isJson = lname.endsWith(jsonExt);
+        const isExpandable = isAudio || isJson;
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "file-row-wrap";
+
         const row = document.createElement("div");
-        row.className = "file-row";
+        row.className = "file-row" + (isExpandable ? " file-row-expandable" : "");
         row.innerHTML = `
+          ${isExpandable ? `<span class="file-expand-chevron">▸</span>` : ""}
           <span class="file-name">${escapeHtml(f.filename)}</span>
           ${f.size_bytes != null ? `<span class="file-size">${formatSize(f.size_bytes)}</span>` : ""}
           <button class="btn-icon-action btn-icon-download" data-dl="${escapeHtml(f.filename)}" title="Download">
@@ -411,7 +590,9 @@ const base = import.meta.env.BASE_URL;
             </svg>
           </button>
         `;
+
         row.querySelector("[data-dl]")!.addEventListener("click", async (e) => {
+          e.stopPropagation();
           const btn = e.currentTarget as HTMLButtonElement;
           btn.classList.add("btn-loading");
           btn.innerHTML = `<span class="spinner spinner-sm"></span>`;
@@ -434,14 +615,194 @@ const base = import.meta.env.BASE_URL;
             btn.classList.remove("btn-loading");
           }
         });
-        detailFiles.appendChild(row);
+
+        wrapper.appendChild(row);
+
+        if (isExpandable) {
+          const expandContent = document.createElement("div");
+          expandContent.className = "file-expand-content hidden";
+          expandContent.innerHTML = `<span class="spinner"></span> Loading…`;
+          wrapper.appendChild(expandContent);
+
+          let expanded = false;
+
+          // Preload content immediately in background
+          (async () => {
+            try {
+              const blob = await downloadFile(id, f.filename);
+
+              if (isAudio) {
+                const blobUrl = URL.createObjectURL(blob);
+                audioBlobCache.set(f.filename, blobUrl);
+                expandContent.innerHTML = "";
+
+                const player = document.createElement("div");
+                player.className = "audio-player";
+
+                const audio = document.createElement("audio");
+                audio.preload = "metadata";
+                audio.src = blobUrl;
+
+                const playBtn = document.createElement("button");
+                playBtn.className = "audio-play-btn";
+                playBtn.innerHTML = `<svg class="audio-icon-play" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg><svg class="audio-icon-pause hidden" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+
+                const progressWrap = document.createElement("div");
+                progressWrap.className = "audio-progress-wrap";
+                const progressBar = document.createElement("div");
+                progressBar.className = "audio-progress-bar";
+                const progressFill = document.createElement("div");
+                progressFill.className = "audio-progress-fill";
+                progressBar.appendChild(progressFill);
+                progressWrap.appendChild(progressBar);
+
+                const timeDisplay = document.createElement("span");
+                timeDisplay.className = "audio-time";
+                timeDisplay.textContent = "0:00 / 0:00";
+
+                player.appendChild(playBtn);
+                player.appendChild(progressWrap);
+                player.appendChild(timeDisplay);
+                expandContent.appendChild(player);
+                expandContent.appendChild(audio);
+
+                const fmtTime = (s: number) => {
+                  if (isNaN(s)) return "0:00";
+                  const m = Math.floor(s / 60);
+                  const sec = Math.floor(s % 60);
+                  return `${m}:${String(sec).padStart(2, "0")}`;
+                };
+
+                audio.addEventListener("loadedmetadata", () => {
+                  timeDisplay.textContent = `0:00 / ${fmtTime(audio.duration)}`;
+                });
+
+                audio.addEventListener("timeupdate", () => {
+                  const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+                  progressFill.style.width = `${pct}%`;
+                  timeDisplay.textContent = `${fmtTime(audio.currentTime)} / ${fmtTime(audio.duration)}`;
+                });
+
+                audio.addEventListener("ended", () => {
+                  playBtn.querySelector(".audio-icon-play")!.classList.remove("hidden");
+                  playBtn.querySelector(".audio-icon-pause")!.classList.add("hidden");
+                });
+
+                playBtn.addEventListener("click", () => {
+                  if (audio.paused) {
+                    audio.play();
+                    playBtn.querySelector(".audio-icon-play")!.classList.add("hidden");
+                    playBtn.querySelector(".audio-icon-pause")!.classList.remove("hidden");
+                  } else {
+                    audio.pause();
+                    playBtn.querySelector(".audio-icon-play")!.classList.remove("hidden");
+                    playBtn.querySelector(".audio-icon-pause")!.classList.add("hidden");
+                  }
+                });
+
+                progressBar.addEventListener("click", (ev) => {
+                  const rect = progressBar.getBoundingClientRect();
+                  const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+                  if (audio.duration) audio.currentTime = pct * audio.duration;
+                });
+              }
+
+              if (isJson) {
+                const text = await blob.text();
+                let formatted: string;
+                try {
+                  formatted = JSON.stringify(JSON.parse(text), null, 2);
+                } catch {
+                  formatted = text;
+                }
+                expandContent.innerHTML = "";
+                const pre = document.createElement("pre");
+                pre.className = "json-preview";
+                pre.innerHTML = highlightJson(formatted);
+                expandContent.appendChild(pre);
+              }
+            } catch (err) {
+              expandContent.innerHTML = `<span style="color:var(--color-danger)">Failed to load: ${escapeHtml((err as Error).message)}</span>`;
+            }
+          })();
+
+          // Toggle only shows/hides the preloaded content
+          row.addEventListener("click", (e) => {
+            if ((e.target as HTMLElement).closest("[data-dl]")) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            expanded = !expanded;
+            const chevron = row.querySelector(".file-expand-chevron") as HTMLElement;
+            chevron.textContent = expanded ? "▾" : "▸";
+            wrapper.classList.toggle("expanded", expanded);
+
+            if (!expanded) {
+              expandContent.classList.add("hidden");
+              if (isAudio) {
+                const audio = expandContent.querySelector("audio");
+                if (audio) {
+                  audio.pause();
+                  const pb = expandContent.querySelector(".audio-play-btn");
+                  if (pb) {
+                    pb.querySelector(".audio-icon-play")!.classList.remove("hidden");
+                    pb.querySelector(".audio-icon-pause")!.classList.add("hidden");
+                  }
+                }
+              }
+              return;
+            }
+
+            expandContent.classList.remove("hidden");
+          });
+        }
+
+        detailFiles.appendChild(wrapper);
       }
       detailFiles.classList.remove("hidden");
+
+      initExtraction(id, imgMeta);
     } catch (err) {
       detailLoading.classList.add("hidden");
       detailFiles.innerHTML = `<p class="status-msg" style="color:var(--color-danger)">Error: ${escapeHtml((err as Error).message)}</p>`;
       detailFiles.classList.remove("hidden");
+      resetExtractionUI();
     }
+  }
+
+  function renderAdvancedTable(obj: Record<string, unknown>): string {
+    let html = `<div class="adv-table">`;
+    for (const [key, value] of Object.entries(obj)) {
+      const displayVal = formatAdvancedValue(value);
+      html += `<div class="adv-row"><span class="adv-key">${escapeHtml(key)}</span><span class="adv-val">${displayVal}</span></div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function formatAdvancedValue(value: unknown): string {
+    if (value === null || value === undefined) return `<span class="adv-null">–</span>`;
+    if (typeof value === "boolean") {
+      return value
+        ? `<span class="adv-bool-true">✓ true</span>`
+        : `<span class="adv-bool-false">✗ false</span>`;
+    }
+    if (typeof value === "number") {
+      return escapeHtml(!Number.isInteger(value) ? value.toFixed(4) : String(value));
+    }
+    if (typeof value === "string") return escapeHtml(value);
+    if (Array.isArray(value)) {
+      if (value.length <= 4) return escapeHtml(JSON.stringify(value));
+      return escapeHtml(`[${value.length} items]`);
+    }
+    if (typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length <= 5) {
+        return entries.map(([k, v]) => `<span class="adv-nested-key">${escapeHtml(k)}:</span> ${formatAdvancedValue(v)}`).join(", ");
+      }
+      return escapeHtml(`{${entries.length} fields}`);
+    }
+    return escapeHtml(String(value));
   }
 
   btnBack.addEventListener("click", (e) => {
@@ -521,9 +882,33 @@ const base = import.meta.env.BASE_URL;
     return d.innerHTML;
   }
 
+  function highlightJson(json: string): string {
+    return json.replace(
+      /("(?:\\.|[^"\\])*")\s*(:)?|(\b(?:true|false|null)\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+      (match, str, colon, bool, num) => {
+        if (str) {
+          if (colon) {
+            return `<span class="json-key">${escapeHtml(str)}</span>:`;
+          }
+          return `<span class="json-string">${escapeHtml(str)}</span>`;
+        }
+        if (bool) return `<span class="json-bool">${match}</span>`;
+        if (num) return `<span class="json-number">${match}</span>`;
+        return match;
+      }
+    );
+  }
+
   function formatDate(iso: string): string {
     try {
-      return new Date(iso).toLocaleString();
+      let normalized = iso.trim();
+      if (!/[Zz]$/.test(normalized) && !/[+-]\d{2}:\d{2}$/.test(normalized) && !/[+-]\d{4}$/.test(normalized)) {
+        normalized += "Z";
+      }
+      return new Date(normalized).toLocaleString("de-DE", {
+        dateStyle: "medium",
+        timeStyle: "medium",
+      });
     } catch {
       return iso;
     }
@@ -534,6 +919,430 @@ const base = import.meta.env.BASE_URL;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
+
+  function cleanupBlobCache() {
+    for (const url of blobCache.values()) URL.revokeObjectURL(url);
+    blobCache.clear();
+  }
+
+  function cleanupAudioCache() {
+    for (const url of audioBlobCache.values()) URL.revokeObjectURL(url);
+    audioBlobCache.clear();
+    detailFiles.querySelectorAll("audio").forEach(a => { a.pause(); a.removeAttribute("src"); a.load(); });
+  }
+
+  function cleanupSessionData() {
+    cleanupBlobCache();
+    cleanupAudioCache();
+    detailFiles.querySelectorAll(".file-expand-content").forEach(el => { el.innerHTML = ""; el.classList.add("hidden"); });
+    resetExtractionUI();
+  }
+
+  function resetExtractionUI() {
+    extractionSection.classList.add("hidden");
+    btnExtract.disabled = false;
+    btnExtract.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg> Extract Images`;
+    extractInfo.classList.add("hidden");
+    extractInfo.textContent = "";
+    extractProgressWrap.classList.add("hidden");
+    extractProgressBar.textContent = "";
+    extractProgressPct.textContent = "0%";
+    extractProgressLabel.textContent = "Extracting…";
+    extractError.classList.add("hidden");
+    extractError.textContent = "";
+    imageGallery.classList.add("hidden");
+    viewerImg.src = "";
+    viewerImg.classList.add("hidden");
+    viewerEmpty.classList.add("hidden");
+    viewerStrip.innerHTML = "";
+    galleryFrames = [];
+    galleryCurrentIdx = 0;
+    galleryTab = "color";
+    cleanupBlobCache();
+    if (extractionEventSource) { extractionEventSource.close(); extractionEventSource = null; }
+    galleryTabs.forEach(t => t.classList.toggle("active", t.dataset.tab === "color"));
+  }
+
+  async function initExtraction(sessionId: string, imgMeta: SessionImageMetadata | null = null) {
+    resetExtractionUI();
+    gallerySessionId = sessionId;
+
+    let hasImages = false;
+    try {
+      const status = await getImageStatus(sessionId);
+      if (status.color_available || status.depth_available) {
+        hasImages = true;
+        loadGallery(sessionId);
+      }
+    } catch { }
+
+    if (!hasImages) {
+      let binExists = false;
+      try {
+        const binCheck = await checkBin(sessionId);
+        binExists = binCheck.bin_file_exists && binCheck.frame_count > 0;
+        if (binExists) {
+          extractionSection.classList.remove("hidden");
+          extractInfo.textContent = `${binCheck.frame_count} frames available for extraction.`;
+          extractInfo.classList.remove("hidden");
+        }
+      } catch { }
+
+      if (!binExists) {
+        const hasBin = Array.from(detailFiles.querySelectorAll(".file-name"))
+          .some(el => el.textContent?.trim().endsWith(".bin"));
+        if (hasBin) {
+          extractionSection.classList.remove("hidden");
+          extractInfo.textContent = "Binary visual data detected. Extract to view images.";
+          extractInfo.classList.remove("hidden");
+        }
+      }
+    }
+  }
+
+  btnExtract.addEventListener("click", () => {
+    if (!gallerySessionId) return;
+    startExtraction(gallerySessionId);
+  });
+
+  async function startExtraction(sessionId: string) {
+    btnExtract.disabled = true;
+    extractError.classList.add("hidden");
+    extractProgressWrap.classList.remove("hidden");
+    extractProgressBar.textContent = buildBlockBar(0);
+    extractProgressPct.textContent = "0%";
+    extractProgressLabel.textContent = "Starting extraction…";
+    imageGallery.classList.add("hidden");
+
+    try {
+      const extractPromise = extractImages(sessionId, true).catch(() => {});
+
+      const streamUrl = getExtractionStreamUrl(sessionId);
+      extractionEventSource = new EventSource(streamUrl);
+
+      extractionEventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          updateExtractionProgress(data);
+          if (data.status === "completed" || data.status === "done") {
+            extractionEventSource?.close();
+            extractionEventSource = null;
+            onExtractionComplete(sessionId);
+          }
+          if (data.status === "error" || data.status === "failed") {
+            extractionEventSource?.close();
+            extractionEventSource = null;
+            onExtractionError(data.errors?.join(", ") || "Extraction failed");
+          }
+        } catch { }
+      };
+
+      extractionEventSource.onerror = () => {
+        extractionEventSource?.close();
+        extractionEventSource = null;
+        pollExtraction(sessionId);
+      };
+
+      await extractPromise;
+    } catch {
+      try {
+        await extractImages(sessionId, false);
+        onExtractionComplete(sessionId);
+      } catch (syncErr) {
+        onExtractionError((syncErr as Error).message);
+      }
+    }
+  }
+
+  function updateExtractionProgress(data: {
+    progress_percent?: number;
+    current_frame?: number;
+    total_frames?: number;
+    status?: string;
+  }) {
+    const pct = Math.round(data.progress_percent ?? 0);
+    extractProgressPct.textContent = `${pct}%`;
+    extractProgressBar.textContent = buildBlockBar(pct);
+    if (data.current_frame != null && data.total_frames != null) {
+      extractProgressLabel.textContent = `Extracting frame ${data.current_frame} / ${data.total_frames}…`;
+    } else if (data.status) {
+      extractProgressLabel.textContent = data.status === "extracting" ? "Extracting…" : data.status;
+    }
+  }
+
+  async function pollExtraction(sessionId: string) {
+    const poll = async () => {
+      try {
+        const progress = await getExtractionProgress(sessionId);
+        updateExtractionProgress(progress);
+        if (progress.status === "completed" || progress.status === "done") {
+          onExtractionComplete(sessionId); return;
+        }
+        if (progress.status === "error" || progress.status === "failed") {
+          onExtractionError(progress.errors?.join(", ") || "Extraction failed"); return;
+        }
+        setTimeout(poll, 1500);
+      } catch {
+        try {
+          const status = await getImageStatus(sessionId);
+          if (status.color_available || status.depth_available) { onExtractionComplete(sessionId); return; }
+        } catch { }
+        onExtractionError("Lost connection to extraction progress.");
+      }
+    };
+    setTimeout(poll, 1500);
+  }
+
+  function onExtractionComplete(sessionId: string) {
+    extractProgressLabel.textContent = "Extraction complete!";
+    extractProgressPct.textContent = "100%";
+    extractProgressBar.textContent = buildBlockBar(100);
+
+    removeBinFilesFromList();
+
+    setTimeout(() => {
+      extractionSection.classList.add("hidden");
+      loadGallery(sessionId);
+    }, 800);
+  }
+
+  function removeBinFilesFromList() {
+    detailFiles.querySelectorAll(".file-row").forEach(row => {
+      const nameEl = row.querySelector(".file-name");
+      if (nameEl?.textContent?.trim().endsWith(".bin")) row.remove();
+    });
+    if (detailFiles.querySelectorAll(".file-row").length === 0) {
+      detailFiles.innerHTML = `<p class="status-msg">No files in this session.</p>`;
+    }
+  }
+
+  function onExtractionError(msg: string) {
+    extractProgressWrap.classList.add("hidden");
+    extractError.textContent = msg;
+    extractError.classList.remove("hidden");
+    btnExtract.disabled = false;
+  }
+
+
+  async function fetchImageAsBlob(url: string): Promise<string> {
+    if (blobCache.has(url)) return blobCache.get(url)!;
+    const res = await fetch(url, { headers: { "X-API-Key": API_KEY } });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    blobCache.set(url, blobUrl);
+    return blobUrl;
+  }
+
+  function getFrameFilename(frameIndex: number): string {
+    return `frame_${String(frameIndex).padStart(4, "0")}.png`;
+  }
+
+  function getRawImageUrl(frameIndex: number): string {
+    const filename = getFrameFilename(frameIndex);
+    return galleryTab === "color"
+      ? getColorImageUrl(gallerySessionId, filename)
+      : getDepthImageUrl(gallerySessionId, filename);
+  }
+
+  async function loadGallery(sessionId: string) {
+    gallerySessionId = sessionId;
+    galleryCurrentIdx = 0;
+    galleryFrames = [];
+    cleanupBlobCache();
+    viewerImg.src = "";
+    viewerImg.classList.add("hidden");
+    viewerEmpty.classList.add("hidden");
+    viewerStrip.innerHTML = "";
+    imageGallery.classList.remove("hidden");
+
+    try {
+      const data = await getFramesPaginated(sessionId, 9999, 0);
+      galleryFrames = data.frames;
+
+      if (galleryFrames.length === 0) {
+        viewerEmpty.classList.remove("hidden");
+        return;
+      }
+
+      renderStrip();
+      await showFrame(0);
+    } catch (err) {
+      viewerEmpty.textContent = `Error: ${(err as Error).message}`;
+      viewerEmpty.classList.remove("hidden");
+    }
+  }
+
+  function renderStrip() {
+    viewerStrip.innerHTML = "";
+    galleryFrames.forEach((frame, idx) => {
+      const thumb = document.createElement("button");
+      thumb.className = "strip-thumb" + (idx === galleryCurrentIdx ? " active" : "");
+      thumb.textContent = `${frame.frame_index}`;
+      thumb.title = `Frame ${frame.frame_index}`;
+      thumb.addEventListener("click", () => showFrame(idx));
+      viewerStrip.appendChild(thumb);
+    });
+  }
+
+  async function showFrame(idx: number) {
+    if (idx < 0 || idx >= galleryFrames.length) return;
+    galleryCurrentIdx = idx;
+    const frame = galleryFrames[idx];
+
+    viewerStrip.querySelectorAll(".strip-thumb").forEach((el, i) => {
+      el.classList.toggle("active", i === idx);
+    });
+    const activeThumb = viewerStrip.querySelector(".strip-thumb.active") as HTMLElement;
+    if (activeThumb) activeThumb.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+
+    viewerPrev.disabled = idx === 0;
+    viewerNext.disabled = idx === galleryFrames.length - 1;
+
+    viewerFrameInfo.textContent = `Frame ${frame.frame_index}  ·  ${idx + 1} / ${galleryFrames.length}`;
+
+    viewerLoading.classList.remove("hidden");
+    viewerImg.classList.add("hidden");
+    viewerEmpty.classList.add("hidden");
+
+    const hasImage = galleryTab === "color" ? frame.hasColor : frame.hasDepth;
+    if (!hasImage) {
+      viewerLoading.classList.add("hidden");
+      viewerEmpty.textContent = `No ${galleryTab} image for this frame.`;
+      viewerEmpty.classList.remove("hidden");
+      return;
+    }
+
+    try {
+      const rawUrl = getRawImageUrl(frame.frame_index);
+      const blobUrl = await fetchImageAsBlob(rawUrl);
+      if (galleryCurrentIdx === idx) {
+        viewerImg.src = blobUrl;
+        viewerImg.alt = `Frame ${frame.frame_index} (${galleryTab})`;
+        viewerImg.classList.remove("hidden");
+        viewerLoading.classList.add("hidden");
+      }
+    } catch {
+      if (galleryCurrentIdx === idx) {
+        viewerLoading.classList.add("hidden");
+        viewerEmpty.textContent = `Failed to load ${galleryTab} image.`;
+        viewerEmpty.classList.remove("hidden");
+      }
+    }
+  }
+
+  viewerPrev.addEventListener("click", () => showFrame(galleryCurrentIdx - 1));
+  viewerNext.addEventListener("click", () => showFrame(galleryCurrentIdx + 1));
+
+  document.addEventListener("keydown", (e) => {
+    if (imageGallery.classList.contains("hidden")) return;
+    if (frameMetaOverlay && !frameMetaOverlay.classList.contains("hidden")) return;
+    if (e.key === "ArrowLeft") { e.preventDefault(); showFrame(galleryCurrentIdx - 1); }
+    if (e.key === "ArrowRight") { e.preventDefault(); showFrame(galleryCurrentIdx + 1); }
+  });
+
+  galleryTabs.forEach(tab => {
+    tab.addEventListener("click", () => {
+      const newTab = tab.dataset.tab as "color" | "depth";
+      if (newTab === galleryTab) return;
+      galleryTab = newTab;
+      galleryTabs.forEach(t => t.classList.toggle("active", t.dataset.tab === newTab));
+      cleanupBlobCache();
+      showFrame(galleryCurrentIdx);
+    });
+  });
+
+  viewerMetaBtn.addEventListener("click", () => {
+    if (galleryFrames.length > 0) openFrameMetadata(galleryFrames[galleryCurrentIdx].frame_index);
+  });
+
+
+  async function openFrameMetadata(frameIndex: number) {
+    frameMetaTitle.textContent = `Frame #${frameIndex}`;
+    frameMetaContent.innerHTML = `<span class="spinner"></span> Loading metadata…`;
+    frameMetaOverlay.classList.remove("hidden");
+
+    try {
+      const meta = await getFrameMetadata(gallerySessionId, frameIndex);
+      frameMetaContent.innerHTML = "";
+
+      if (meta.visual) {
+        const section = document.createElement("div");
+        section.className = "meta-section";
+        section.innerHTML = `<h4 class="meta-section-title">Visual Data</h4>`;
+        section.appendChild(renderMetaObject(meta.visual));
+        frameMetaContent.appendChild(section);
+      }
+
+      if (meta.tracking) {
+        const section = document.createElement("div");
+        section.className = "meta-section";
+        section.innerHTML = `<h4 class="meta-section-title">Tracking Data</h4>`;
+        section.appendChild(renderMetaObject(meta.tracking));
+        frameMetaContent.appendChild(section);
+      }
+    } catch (err) {
+      frameMetaContent.innerHTML = `<p style="color:var(--color-danger)">Failed to load metadata: ${escapeHtml((err as Error).message)}</p>`;
+    }
+  }
+
+  function renderMetaObject(obj: Record<string, unknown>, prefix = ""): HTMLElement {
+    const container = document.createElement("div");
+    container.className = "adv-table";
+
+    for (const [key, value] of Object.entries(obj)) {
+      const fullKey = prefix ? `${prefix}.${key}` : key;
+
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        container.appendChild(renderMetaObject(value as Record<string, unknown>, fullKey));
+        continue;
+      }
+
+      const row = document.createElement("div");
+      row.className = "adv-row";
+
+      const keyEl = document.createElement("span");
+      keyEl.className = "adv-key";
+      keyEl.textContent = fullKey;
+
+      const valEl = document.createElement("span");
+      valEl.className = "adv-val";
+
+      if (Array.isArray(value)) {
+        if (value.length <= 6) {
+          valEl.textContent = JSON.stringify(value);
+        } else {
+          valEl.textContent = `[${value.length} items]`;
+          valEl.title = JSON.stringify(value);
+          valEl.style.cursor = "help";
+        }
+      } else if (typeof value === "boolean") {
+        valEl.innerHTML = value
+          ? `<span class="adv-bool-true">true</span>`
+          : `<span class="adv-bool-false">false</span>`;
+      } else if (typeof value === "number") {
+        valEl.textContent = !Number.isInteger(value) ? value.toFixed(4) : String(value);
+      } else {
+        valEl.textContent = String(value ?? "–");
+      }
+
+      row.appendChild(keyEl);
+      row.appendChild(valEl);
+      container.appendChild(row);
+    }
+    return container;
+  }
+
+  frameMetaClose.addEventListener("click", () => {
+    frameMetaOverlay.classList.add("hidden");
+    frameMetaContent.innerHTML = "";
+  });
+
+  frameMetaOverlay.addEventListener("click", (e) => {
+    if (e.target === frameMetaOverlay) {
+      frameMetaOverlay.classList.add("hidden");
+    }
+  });
 </script>
 
 <style>
@@ -674,6 +1483,7 @@ const base = import.meta.env.BASE_URL;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     padding: 1rem 1.25rem;
+    margin-top: 0.75rem;
   }
 
   :global(.meta-item) {
@@ -694,6 +1504,110 @@ const base = import.meta.env.BASE_URL;
     font-size: 0.9rem;
     font-weight: 500;
     color: var(--color-text);
+  }
+
+  .detail-meta-advanced {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    margin-top: 0.75rem;
+    overflow: hidden;
+  }
+
+  .detail-meta-summary {
+    padding: 0.7rem 1.25rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: color var(--transition), background var(--transition);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .detail-meta-summary::before {
+    content: "▸";
+    transition: transform 0.2s ease;
+    font-size: 0.7rem;
+  }
+
+  .detail-meta-advanced[open] > .detail-meta-summary::before {
+    transform: rotate(90deg);
+  }
+
+  .detail-meta-summary:hover {
+    color: var(--color-text);
+    background: var(--color-surface-hover);
+  }
+
+  .detail-meta-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .detail-meta-advanced-content {
+    padding: 0.5rem 1.25rem 1rem;
+    animation: fadeIn 0.2s ease;
+  }
+
+  :global(.adv-section-title) {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-primary);
+    margin: 0.75rem 0 0.35rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  :global(.adv-section-title:first-child) {
+    margin-top: 0;
+  }
+
+  :global(.adv-table) {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  :global(.adv-row) {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    padding: 0.2rem 0;
+    font-size: 0.78rem;
+    border-bottom: 1px solid rgba(42, 42, 46, 0.4);
+  }
+
+  :global(.adv-row:last-child) {
+    border-bottom: none;
+  }
+
+  :global(.adv-key) {
+    color: var(--color-text-muted);
+    font-weight: 500;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  :global(.adv-val) {
+    color: var(--color-text);
+    text-align: right;
+    word-break: break-all;
+    min-width: 0;
+  }
+
+  :global(.adv-bool-true) { color: #22c55e; }
+  :global(.adv-bool-false) { color: var(--color-text-muted); }
+  :global(.adv-null) { color: var(--color-text-muted); font-style: italic; }
+  :global(.adv-nested-key) {
+    color: var(--color-text-muted);
+    font-weight: 500;
+    font-size: 0.72rem;
   }
 
   .sessions-list-wrap {
@@ -924,6 +1838,7 @@ const base = import.meta.env.BASE_URL;
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+    margin-top: 0.75rem;
   }
 
   :global(.file-row) {
@@ -1080,6 +1995,511 @@ const base = import.meta.env.BASE_URL;
       flex-direction: column;
       align-items: flex-start;
     }
+  }
+
+
+  .extraction-section {
+    margin-top: 0.75rem;
+    padding: 1.25rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .extraction-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .extraction-title {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .extraction-info {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+  }
+
+  .extraction-error {
+    margin-top: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--color-danger);
+    padding: 0.6rem 0.8rem;
+    background: rgba(239, 68, 68, 0.08);
+    border-radius: var(--radius-sm);
+  }
+
+  .extract-progress-wrap {
+    margin-top: 0.75rem;
+  }
+
+  .extract-progress-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+    margin-bottom: 0.35rem;
+  }
+
+  .extract-progress-bar {
+    font-family: monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.5px;
+    line-height: 1;
+    color: var(--color-primary);
+    white-space: pre;
+    overflow: hidden;
+  }
+
+
+  .image-gallery {
+    margin-top: 0.75rem;
+  }
+
+  .gallery-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .gallery-title {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .gallery-tabs {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
+  .gallery-tab {
+    padding: 0.35rem 0.9rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: none;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .gallery-tab:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  .gallery-tab.active {
+    background: var(--color-primary);
+    color: #fff;
+  }
+
+  .viewer-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0.5rem;
+    height: 520px;
+  }
+
+  .viewer-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .viewer-nav:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+    border-color: var(--color-text-muted);
+  }
+
+  .viewer-nav:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+  }
+
+  .viewer-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .viewer-img {
+    max-width: 100%;
+    max-height: 500px;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+  }
+
+  .viewer-img.hidden {
+    display: none;
+  }
+
+  .viewer-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .viewer-empty {
+    color: var(--color-text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+  }
+
+  .viewer-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    padding: 0 0.25rem;
+  }
+
+  .viewer-frame-info {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .viewer-strip {
+    display: flex;
+    gap: 0.25rem;
+    overflow-x: auto;
+    padding: 0.5rem 0 0.25rem;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  .viewer-strip::-webkit-scrollbar {
+    height: 5px;
+  }
+  .viewer-strip::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  :global(.strip-thumb) {
+    flex-shrink: 0;
+    min-width: 32px;
+    height: 26px;
+    padding: 0 0.35rem;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: none;
+    color: var(--color-text-muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  }
+
+  :global(.strip-thumb:hover) {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+    border-color: var(--color-text-muted);
+  }
+
+  :global(.strip-thumb.active) {
+    background: var(--color-primary);
+    color: #fff;
+    border-color: var(--color-primary);
+  }
+
+
+  .frame-meta-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .frame-meta-overlay.hidden {
+    display: none;
+  }
+
+  .frame-meta-dialog {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    max-width: 700px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 1.25rem;
+  }
+
+  .frame-meta-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+
+  .frame-meta-title {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+
+  .frame-meta-content {
+    font-size: 0.82rem;
+  }
+
+  .meta-section {
+    margin-bottom: 1rem;
+  }
+
+  .meta-section-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-primary);
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  @media (max-width: 600px) {
+    .viewer-wrap {
+      height: 360px;
+    }
+
+    .viewer-img {
+      max-height: 300px;
+    }
+
+    .frame-meta-dialog {
+      max-height: 90vh;
+      padding: 1rem;
+    }
+
+    .extraction-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+
+  :global(.file-row-wrap) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  :global(.file-row-expandable) {
+    cursor: pointer;
+  }
+
+  :global(.file-row-wrap.expanded > .file-row) {
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    border-bottom-color: transparent;
+  }
+
+  :global(.file-expand-chevron) {
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    width: 12px;
+    text-align: center;
+    transition: color 0.15s ease, transform 0.2s ease;
+    display: inline-block;
+  }
+
+  :global(.file-row-expandable:hover .file-expand-chevron) {
+    color: var(--color-primary);
+  }
+
+  :global(.file-expand-content) {
+    padding: 0.75rem 1rem;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-top: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    animation: fadeIn 0.2s ease;
+    max-height: 350px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  :global(.file-expand-content.hidden) {
+    display: none !important;
+  }
+
+  :global(.file-expand-content audio) {
+    display: none;
+  }
+
+  :global(.audio-player) {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.85rem;
+  }
+
+  :global(.audio-play-btn) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: var(--color-primary);
+    color: #fff;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  }
+
+  :global(.audio-play-btn:hover) {
+    background: var(--color-primary-hover);
+    box-shadow: 0 0 12px rgba(109, 93, 252, 0.3);
+  }
+
+  :global(.audio-play-btn:active) {
+    transform: scale(0.92);
+  }
+
+  :global(.audio-progress-wrap) {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  :global(.audio-progress-bar) {
+    width: 100%;
+    height: 6px;
+    background: var(--color-border);
+    border-radius: 3px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: height 0.12s ease;
+  }
+
+  :global(.audio-progress-bar:hover) {
+    height: 8px;
+  }
+
+  :global(.audio-progress-fill) {
+    height: 100%;
+    background: var(--color-primary);
+    border-radius: 3px;
+    width: 0;
+    transition: width 0.1s linear;
+  }
+
+  :global(.audio-time) {
+    font-size: 0.7rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  :global(.audio-icon-play),
+  :global(.audio-icon-pause) {
+    display: block;
+  }
+
+  :global(.audio-icon-play.hidden),
+  :global(.audio-icon-pause.hidden) {
+    display: none;
+  }
+
+  :global(.json-preview) {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: var(--color-text-muted);
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 300px;
+    white-space: pre;
+    tab-size: 2;
+    margin: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  :global(.json-preview::-webkit-scrollbar) {
+    width: 6px;
+    height: 6px;
+  }
+
+  :global(.json-preview::-webkit-scrollbar-thumb) {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  :global(.json-preview::-webkit-scrollbar-thumb:hover) {
+    background: var(--color-text-muted);
+  }
+
+  :global(.json-key) {
+    color: #8577fd;
+  }
+
+  :global(.json-string) {
+    color: #22c55e;
+  }
+
+  :global(.json-number) {
+    color: #f59e0b;
+  }
+
+  :global(.json-bool) {
+    color: #38bdf8;
+    font-weight: 600;
+  }
+
+  :global(.json-preview code) {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
   }
 </style>
 
