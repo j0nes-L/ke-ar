@@ -20,7 +20,7 @@
         aria-label="QR code content string"
       />
     </div>
-    <button id="qr-generate" class="btn btn-primary">Generate</button>
+    <button id="qr-generate" class="btn btn-primary" disabled>Generate</button>
   </div>
 
   <div id="qr-output" class="qr-output hidden">
@@ -70,6 +70,10 @@
   }
 
   generateBtn.addEventListener("click", generate);
+
+  input.addEventListener("input", () => {
+    generateBtn.disabled = !input.value.trim();
+  });
 
   input.addEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter") generate();
@@ -210,8 +214,13 @@
     color: #fff;
   }
 
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background: var(--color-primary-hover);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
   }
 
   .btn-secondary {
