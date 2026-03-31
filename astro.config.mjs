@@ -3,5 +3,6 @@ import { defineConfig } from 'astro/config';
 
 // https://astro.build/config
 export default defineConfig({
-  base: '/ke-ar',
+    site: 'https://j0nes_l.github.io',
+    base: '/ke-ar',
 });
