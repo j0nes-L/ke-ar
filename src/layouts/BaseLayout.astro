@@ -1,0 +1,88 @@
+---
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="header-inner">
+        <a href="/ke-ar/" class="logo">KE-AR</a>
+        <span class="tagline">Playground</span>
+      </div>
+    </header>
+
+    <main class="site-main">
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <p>&copy; {new Date().getFullYear()} KE-AR</p>
+    </footer>
+  </body>
+</html>
+
+<style>
+  @import "../styles/global.css";
+
+  .site-header {
+    border-bottom: 1px solid var(--color-border);
+    padding: 1rem 1.5rem;
+  }
+
+  .header-inner {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .logo {
+    font-weight: 700;
+    font-size: 1.25rem;
+    letter-spacing: -0.02em;
+    color: var(--color-text);
+  }
+
+  .logo:hover {
+    color: var(--color-primary);
+  }
+
+  .tagline {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+  }
+
+  .site-main {
+    flex: 1;
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem;
+  }
+
+  .site-footer {
+    border-top: 1px solid var(--color-border);
+    padding: 1.5rem;
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
+  }
+</style>
+

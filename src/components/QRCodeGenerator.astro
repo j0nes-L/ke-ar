@@ -1,0 +1,280 @@
+---
+
+---
+
+<section class="qr-generator">
+  <h2 class="section-title">Physical Marker Generator</h2>
+  <p class="section-desc">
+    Enter a string to generate a QR code in
+    <code>ke-ar-marker</code> format. You can then print the code and use it as a registerable physical marker.
+  </p>
+
+  <div class="input-row">
+    <div class="input-wrapper">
+      <span class="input-prefix">ke-ar-marker_</span>
+      <input
+        type="text"
+        id="qr-input"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="QR code content string"
+      />
+    </div>
+    <button id="qr-generate" class="btn btn-primary">Generate</button>
+  </div>
+
+  <div id="qr-output" class="qr-output hidden">
+    <div class="qr-card">
+      <div id="qr-canvas-wrap" class="qr-canvas-wrap print-area">
+        <canvas id="qr-canvas"></canvas>
+      </div>
+      <p id="qr-label" class="qr-label"></p>
+      <div class="qr-actions">
+        <button id="qr-print" class="btn btn-secondary">Print</button>
+        <button id="qr-download" class="btn btn-secondary">Download</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  import QRCode from "qrcode";
+
+  const input = document.getElementById("qr-input") as HTMLInputElement;
+  const generateBtn = document.getElementById("qr-generate") as HTMLButtonElement;
+  const output = document.getElementById("qr-output") as HTMLDivElement;
+  const canvas = document.getElementById("qr-canvas") as HTMLCanvasElement;
+  const label = document.getElementById("qr-label") as HTMLParagraphElement;
+  const printBtn = document.getElementById("qr-print") as HTMLButtonElement;
+  const downloadBtn = document.getElementById("qr-download") as HTMLButtonElement;
+
+  let currentValue = "";
+
+  function generate() {
+    const raw = input.value.trim();
+    if (!raw) return;
+
+    currentValue = `ke-ar-marker_${raw}`;
+
+    QRCode.toCanvas(canvas, currentValue, {
+      width: 280,
+      margin: 2,
+      color: {
+        dark: "#000000",
+        light: "#ffffff",
+      },
+    });
+
+    label.textContent = raw;
+    output.classList.remove("hidden");
+  }
+
+  generateBtn.addEventListener("click", generate);
+
+  input.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") generate();
+  });
+
+  printBtn.addEventListener("click", () => {
+    const dataUrl = canvas.toDataURL("image/png");
+    const raw = input.value.trim();
+    let iframe = document.getElementById("qr-print-frame") as HTMLIFrameElement | null;
+    if (!iframe) {
+      iframe = document.createElement("iframe");
+      iframe.id = "qr-print-frame";
+      iframe.style.position = "fixed";
+      iframe.style.inset = "0";
+      iframe.style.width = "0";
+      iframe.style.height = "0";
+      iframe.style.border = "none";
+      iframe.style.opacity = "0";
+      document.body.appendChild(iframe);
+    }
+    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!doc) return;
+    doc.open();
+    doc.write(
+      `<!DOCTYPE html><html lang="en"><head><title>Print QR</title><style>@page{margin:0}*{margin:0;padding:0;box-sizing:border-box}html,body{width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;font-family:system-ui,sans-serif}img{width:85vmin;height:85vmin}p{margin-top:2vmin;font-size:4vmin;font-weight:700;color:#000}</style></head><body><img alt="QR Code" src="${dataUrl}" /><p>${raw}</p></body></html>`
+    );
+    doc.close();
+    const img = doc.querySelector("img") as HTMLImageElement;
+    if (img.complete) {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } else {
+      img.onload = () => {
+        iframe!.contentWindow?.focus();
+        iframe!.contentWindow?.print();
+      };
+    }
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const link = document.createElement("a");
+    link.download = `${currentValue}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  });
+</script>
+
+<style>
+  .qr-generator {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .section-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .section-desc {
+    color: var(--color-text-muted);
+    font-size: 0.95rem;
+  }
+
+  .section-desc code {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.15em 0.4em;
+    font-size: 0.85em;
+  }
+
+  .input-row {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
+
+  .input-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0 1rem;
+    transition: border-color var(--transition);
+  }
+
+  .input-wrapper:focus-within {
+    border-color: var(--color-primary);
+  }
+
+  .input-prefix {
+    color: var(--color-text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    user-select: none;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.2em 0.45em;
+    margin-right: 0.5rem;
+  }
+
+  .input-wrapper input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--color-text);
+    font-size: 0.95rem;
+    padding: 0.75rem 0;
+    min-width: 0;
+  }
+
+  .input-wrapper input::placeholder {
+    color: var(--color-text-muted);
+    opacity: 0.5;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.7rem 1.4rem;
+    border-radius: var(--radius-md);
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: none;
+    transition: background var(--transition), color var(--transition);
+  }
+
+  .btn-primary {
+    background: var(--color-primary);
+    color: #fff;
+  }
+
+  .btn-primary:hover {
+    background: var(--color-primary-hover);
+  }
+
+  .btn-secondary {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+  }
+
+  .btn-secondary:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .qr-output {
+    display: flex;
+    justify-content: center;
+  }
+
+  .qr-output.hidden {
+    display: none;
+  }
+
+  .qr-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .qr-canvas-wrap {
+    background: #fff;
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .qr-label {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--color-text);
+    word-break: break-all;
+    text-align: center;
+  }
+
+  .qr-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  @media (max-width: 500px) {
+    .input-row {
+      flex-direction: column;
+    }
+
+    .qr-card {
+      padding: 1.25rem;
+      width: 100%;
+    }
+  }
+</style>
+

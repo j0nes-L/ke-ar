@@ -1,15 +1,8 @@
 ---
-
+import BaseLayout from "../layouts/BaseLayout.astro";
+import QRCodeGenerator from "../components/QRCodeGenerator.astro";
 ---
 
-<html lang="en">
-	<head>
-		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width" />
-		<meta name="generator" content={Astro.generator} />
-		<title>KE-AR Playground</title>
-	</head>
-	<body>
-		<p>Test</p>
-	</body>
-</html>
+<BaseLayout title="QR Code Generator — KE-AR">
+  <QRCodeGenerator />
+</BaseLayout>
