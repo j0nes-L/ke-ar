@@ -44,6 +44,15 @@ const base = import.meta.env.BASE_URL;
         <div class="upload-row">
           <input type="file" id="upload-files" multiple class="upload-input" />
         </div>
+        <div id="upload-session-id-row" class="upload-session-id-row hidden">
+          <label for="upload-session-id" class="upload-session-id-label">
+            No JSON file found – enter or confirm the Session ID:
+          </label>
+          <div class="upload-session-id-input-row">
+            <input type="text" id="upload-session-id" placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890" class="upload-session-id-input" />
+            <button id="upload-session-id-confirm" class="btn btn-primary btn-sm">Upload</button>
+          </div>
+        </div>
         <div id="upload-file-list" class="upload-file-list hidden"></div>
         <p id="upload-status" class="upload-status hidden"></p>
       </div>
@@ -116,6 +125,39 @@ const base = import.meta.env.BASE_URL;
         <p id="extract-error" class="extraction-error hidden"></p>
       </div>
 
+      <div id="transcription-section" class="extraction-section hidden">
+        <div class="extraction-header">
+          <h3 class="extraction-title">Transcription</h3>
+          <div class="transcription-controls">
+            <select id="transcription-model" class="transcription-model-select">
+              <option value="tiny">tiny – Very fast</option>
+              <option value="base" selected>base – Standard</option>
+              <option value="small">small – Good Balance</option>
+              <option value="medium">medium – High Quality</option>
+              <option value="large">large – Best Quality</option>
+            </select>
+            <button id="btn-transcribe" class="btn btn-primary btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="23"></line>
+                <line x1="8" y1="23" x2="16" y2="23"></line>
+              </svg>
+              Transcribe
+            </button>
+          </div>
+        </div>
+        <p id="transcribe-info" class="extraction-info hidden"></p>
+        <div id="transcribe-progress-wrap" class="extract-progress-wrap hidden">
+          <div class="extract-progress-header">
+            <span id="transcribe-progress-label">Starting transcription…</span>
+            <span id="transcribe-progress-pct">0%</span>
+          </div>
+          <div id="transcribe-progress-bar" class="extract-progress-bar"></div>
+        </div>
+        <p id="transcribe-error" class="extraction-error hidden"></p>
+      </div>
+
       <div id="image-gallery" class="image-gallery hidden">
         <div class="gallery-header">
           <h3 class="gallery-title">Session Images</h3>
@@ -169,6 +211,7 @@ const base = import.meta.env.BASE_URL;
     getSessions,
     getSession,
     uploadSession,
+    extractSessionIdFromFilenames,
     deleteSession,
     downloadFile,
     getSessionImageMetadata,
@@ -181,8 +224,12 @@ const base = import.meta.env.BASE_URL;
     getFrameMetadata,
     getColorImageUrl,
     getDepthImageUrl,
+    checkTranscription,
+    startTranscription,
+    getTranscriptionProgress,
+    getTranscriptResult,
   } from "../../lib/api";
-  import type { FileUploadState, FrameSummary, SessionImageMetadata } from "../../lib/api";
+  import type { FileUploadState, FrameSummary, SessionImageMetadata, TranscriptResult } from "../../lib/api";
   import { isAuthenticated, setAuthenticated, logout } from "../../lib/auth";
 
   const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -201,6 +248,9 @@ const base = import.meta.env.BASE_URL;
   const detailView = document.getElementById("detail-view") as HTMLElement;
 
   const uploadFilesInput = document.getElementById("upload-files") as HTMLInputElement;
+  const uploadSessionIdRow = document.getElementById("upload-session-id-row") as HTMLElement;
+  const uploadSessionIdInput = document.getElementById("upload-session-id") as HTMLInputElement;
+  const uploadSessionIdConfirm = document.getElementById("upload-session-id-confirm") as HTMLButtonElement;
   const uploadFileList = document.getElementById("upload-file-list") as HTMLElement;
   const uploadStatus = document.getElementById("upload-status") as HTMLElement;
   const refreshBtn = document.getElementById("btn-refresh") as HTMLButtonElement;
@@ -233,6 +283,16 @@ const base = import.meta.env.BASE_URL;
   const extractProgressBar = document.getElementById("extract-progress-bar") as HTMLElement;
   const extractError = document.getElementById("extract-error") as HTMLElement;
 
+  const transcriptionSection = document.getElementById("transcription-section") as HTMLElement;
+  const btnTranscribe = document.getElementById("btn-transcribe") as HTMLButtonElement;
+  const transcriptionModelSelect = document.getElementById("transcription-model") as HTMLSelectElement;
+  const transcribeInfo = document.getElementById("transcribe-info") as HTMLElement;
+  const transcribeProgressWrap = document.getElementById("transcribe-progress-wrap") as HTMLElement;
+  const transcribeProgressLabel = document.getElementById("transcribe-progress-label") as HTMLElement;
+  const transcribeProgressPct = document.getElementById("transcribe-progress-pct") as HTMLElement;
+  const transcribeProgressBar = document.getElementById("transcribe-progress-bar") as HTMLElement;
+  const transcribeError = document.getElementById("transcribe-error") as HTMLElement;
+
   const imageGallery = document.getElementById("image-gallery") as HTMLElement;
   const galleryTabs = document.querySelectorAll(".gallery-tab") as NodeListOf<HTMLButtonElement>;
   const viewerImg = document.getElementById("viewer-img") as HTMLImageElement;
@@ -259,6 +319,7 @@ const base = import.meta.env.BASE_URL;
   let galleryFrames: FrameSummary[] = [];
   let galleryCurrentIdx = 0;
   let extractionEventSource: EventSource | null = null;
+  let currentTranscript: TranscriptResult | null = null;
   const blobCache = new Map<string, string>();
   const audioBlobCache = new Map<string, string>();
 
@@ -319,6 +380,8 @@ const base = import.meta.env.BASE_URL;
 
   function resetUploadUI() {
     uploadFilesInput.value = "";
+    uploadSessionIdRow.classList.add("hidden");
+    uploadSessionIdInput.value = "";
     uploadFileList.classList.add("hidden");
     uploadFileList.innerHTML = "";
     uploadStatus.classList.add("hidden");
@@ -560,6 +623,7 @@ const base = import.meta.env.BASE_URL;
         detailFiles.innerHTML = `<p class="status-msg">No files in this session.</p>`;
         detailFiles.classList.remove("hidden");
         initExtraction(id, imgMeta);
+        initTranscription(id);
         return;
       }
 
@@ -626,7 +690,6 @@ const base = import.meta.env.BASE_URL;
 
           let expanded = false;
 
-          // Preload content immediately in background
           (async () => {
             try {
               const blob = await downloadFile(id, f.filename);
@@ -665,6 +728,11 @@ const base = import.meta.env.BASE_URL;
                 player.appendChild(timeDisplay);
                 expandContent.appendChild(player);
                 expandContent.appendChild(audio);
+
+                const transcriptWrap = document.createElement("div");
+                transcriptWrap.className = "transcript-display hidden";
+                transcriptWrap.dataset.audioFilename = f.filename;
+                expandContent.appendChild(transcriptWrap);
 
                 const fmtTime = (s: number) => {
                   if (isNaN(s)) return "0:00";
@@ -726,7 +794,6 @@ const base = import.meta.env.BASE_URL;
             }
           })();
 
-          // Toggle only shows/hides the preloaded content
           row.addEventListener("click", (e) => {
             if ((e.target as HTMLElement).closest("[data-dl]")) return;
             e.preventDefault();
@@ -762,11 +829,13 @@ const base = import.meta.env.BASE_URL;
       detailFiles.classList.remove("hidden");
 
       initExtraction(id, imgMeta);
+      initTranscription(id);
     } catch (err) {
       detailLoading.classList.add("hidden");
       detailFiles.innerHTML = `<p class="status-msg" style="color:var(--color-danger)">Error: ${escapeHtml((err as Error).message)}</p>`;
       detailFiles.classList.remove("hidden");
       resetExtractionUI();
+      resetTranscriptionUI();
     }
   }
 
@@ -845,19 +914,48 @@ const base = import.meta.env.BASE_URL;
   }
 
 
+  let pendingUploadFiles: File[] = [];
+
   uploadFilesInput.addEventListener("change", () => {
     const files = Array.from(uploadFilesInput.files ?? []);
     if (!files.length || isUploading) return;
-    startUpload(files);
+
+    const hasJson = files.some((f) => f.name.toLowerCase().endsWith(".json"));
+    if (hasJson) {
+      uploadSessionIdRow.classList.add("hidden");
+      startUpload(files);
+    } else {
+      pendingUploadFiles = files;
+      const extracted = extractSessionIdFromFilenames(files);
+      uploadSessionIdInput.value = extracted ?? "";
+      uploadSessionIdRow.classList.remove("hidden");
+      uploadSessionIdInput.focus();
+    }
   });
 
-  async function startUpload(files: File[]) {
+  uploadSessionIdConfirm.addEventListener("click", () => {
+    const sid = uploadSessionIdInput.value.trim();
+    if (!sid) {
+      uploadStatus.textContent = "Please enter a Session ID.";
+      uploadStatus.className = "upload-status error";
+      uploadStatus.classList.remove("hidden");
+      return;
+    }
+    uploadSessionIdRow.classList.add("hidden");
+    startUpload(pendingUploadFiles, sid);
+  });
+
+  uploadSessionIdInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") uploadSessionIdConfirm.click();
+  });
+
+  async function startUpload(files: File[], sessionId?: string) {
     isUploading = true;
     uploadFilesInput.disabled = true;
     uploadStatus.classList.add("hidden");
 
     try {
-      await uploadSession(files, renderFileProgress);
+      await uploadSession(files, renderFileProgress, sessionId);
       uploadStatus.textContent = "Upload successful!";
       uploadStatus.className = "upload-status success";
       uploadStatus.classList.remove("hidden");
@@ -873,6 +971,7 @@ const base = import.meta.env.BASE_URL;
     } finally {
       isUploading = false;
       uploadFilesInput.disabled = false;
+      pendingUploadFiles = [];
     }
   }
 
@@ -936,6 +1035,7 @@ const base = import.meta.env.BASE_URL;
     cleanupAudioCache();
     detailFiles.querySelectorAll(".file-expand-content").forEach(el => { el.innerHTML = ""; el.classList.add("hidden"); });
     resetExtractionUI();
+    resetTranscriptionUI();
   }
 
   function resetExtractionUI() {
@@ -961,6 +1061,210 @@ const base = import.meta.env.BASE_URL;
     cleanupBlobCache();
     if (extractionEventSource) { extractionEventSource.close(); extractionEventSource = null; }
     galleryTabs.forEach(t => t.classList.toggle("active", t.dataset.tab === "color"));
+  }
+
+  function resetTranscriptionUI() {
+    transcriptionSection.classList.add("hidden");
+    btnTranscribe.disabled = false;
+    transcribeInfo.classList.add("hidden");
+    transcribeInfo.textContent = "";
+    transcribeProgressWrap.classList.add("hidden");
+    transcribeProgressBar.textContent = "";
+    transcribeProgressPct.textContent = "0%";
+    transcribeProgressLabel.textContent = "Starting transcription…";
+    transcribeError.classList.add("hidden");
+    transcribeError.textContent = "";
+    currentTranscript = null;
+  }
+
+  async function initTranscription(sessionId: string) {
+    resetTranscriptionUI();
+
+    try {
+      const check = await checkTranscription(sessionId);
+
+      if (!check.audio_file_exists) {
+        return;
+      }
+
+      if (check.transcript_exists) {
+        try {
+          const result = await getTranscriptResult(sessionId);
+          currentTranscript = result;
+          renderTranscriptInAudio(result);
+        } catch { }
+        return;
+      }
+
+      transcriptionSection.classList.remove("hidden");
+      transcribeInfo.textContent = `Audio file "${check.audio_filename}" available for transcription.`;
+      transcribeInfo.classList.remove("hidden");
+    } catch {
+    }
+  }
+
+  function renderTranscriptInAudio(result: TranscriptResult) {
+    const transcriptWraps = detailFiles.querySelectorAll<HTMLElement>(".transcript-display");
+    transcriptWraps.forEach(wrap => {
+      wrap.classList.remove("hidden");
+      wrap.innerHTML = "";
+
+      const header = document.createElement("div");
+      header.className = "transcript-header";
+      header.innerHTML = `
+        <span class="transcript-title">Transcript</span>
+        <span class="transcript-meta">${escapeHtml(result.language.toUpperCase())} · ${formatDuration(result.duration_seconds)} · ${result.segments.length} Segmente</span>
+      `;
+      wrap.appendChild(header);
+
+      const segmentsWrap = document.createElement("div");
+      segmentsWrap.className = "transcript-segments";
+
+      for (const seg of result.segments) {
+        const segEl = document.createElement("div");
+        segEl.className = "transcript-segment";
+        segEl.innerHTML = `
+          <span class="transcript-time" data-start="${seg.start}">${formatTimestamp(seg.start)}</span>
+          <span class="transcript-text">${escapeHtml(seg.text.trim())}</span>
+        `;
+        const timeEl = segEl.querySelector(".transcript-time") as HTMLElement;
+        timeEl.addEventListener("click", () => {
+          const audio = wrap.closest(".file-expand-content")?.querySelector("audio") as HTMLAudioElement | null;
+          if (audio) {
+            audio.currentTime = seg.start;
+            if (audio.paused) {
+              audio.play();
+              const pb = wrap.closest(".file-expand-content")?.querySelector(".audio-play-btn");
+              if (pb) {
+                pb.querySelector(".audio-icon-play")!.classList.add("hidden");
+                pb.querySelector(".audio-icon-pause")!.classList.remove("hidden");
+              }
+            }
+          }
+        });
+        segmentsWrap.appendChild(segEl);
+      }
+
+      wrap.appendChild(segmentsWrap);
+
+      const audio = wrap.closest(".file-expand-content")?.querySelector("audio") as HTMLAudioElement | null;
+      if (audio) {
+        audio.addEventListener("timeupdate", () => {
+          const currentTime = audio.currentTime;
+          segmentsWrap.querySelectorAll(".transcript-segment").forEach((el, i) => {
+            const seg = result.segments[i];
+            const isActive = currentTime >= seg.start && currentTime < seg.end;
+            el.classList.toggle("active", isActive);
+            if (isActive) {
+              el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+          });
+        });
+      }
+    });
+  }
+
+  function formatTimestamp(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+
+  function formatDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  }
+
+  btnTranscribe.addEventListener("click", () => {
+    const sid = getSessionIdFromUrl();
+    if (!sid) return;
+    startTranscriptionProcess(sid);
+  });
+
+  async function startTranscriptionProcess(sessionId: string) {
+    btnTranscribe.disabled = true;
+    transcribeError.classList.add("hidden");
+    transcribeProgressWrap.classList.remove("hidden");
+    transcribeProgressBar.textContent = buildBlockBar(0);
+    transcribeProgressPct.textContent = "0%";
+    transcribeProgressLabel.textContent = "Starting transcription…";
+
+    const model = transcriptionModelSelect.value;
+
+    try {
+      await startTranscription(sessionId, model, true);
+      pollTranscription(sessionId);
+    } catch {
+      try {
+        await startTranscription(sessionId, model, false);
+        onTranscriptionComplete(sessionId);
+      } catch (syncErr) {
+        onTranscriptionError((syncErr as Error).message);
+      }
+    }
+  }
+
+  function updateTranscriptionProgress(data: {
+    progress_percent?: number;
+    current_step?: string;
+    status?: string;
+  }) {
+    const pct = Math.round(data.progress_percent ?? 0);
+    transcribeProgressPct.textContent = `${pct}%`;
+    transcribeProgressBar.textContent = buildBlockBar(pct);
+    if (data.current_step) {
+      transcribeProgressLabel.textContent = data.current_step;
+    } else if (data.status) {
+      transcribeProgressLabel.textContent = data.status === "processing" ? "Transcribing audio…" : data.status;
+    }
+  }
+
+  async function pollTranscription(sessionId: string) {
+    const poll = async () => {
+      try {
+        const progress = await getTranscriptionProgress(sessionId);
+        updateTranscriptionProgress(progress);
+        if (progress.status === "completed") {
+          onTranscriptionComplete(sessionId); return;
+        }
+        if (progress.status === "error") {
+          onTranscriptionError(progress.error || "Transcription failed"); return;
+        }
+        setTimeout(poll, 2000);
+      } catch {
+        try {
+          const check = await checkTranscription(sessionId);
+          if (check.transcript_exists) { onTranscriptionComplete(sessionId); return; }
+        } catch { }
+        onTranscriptionError("Lost connection to transcription progress.");
+      }
+    };
+    setTimeout(poll, 2000);
+  }
+
+  async function onTranscriptionComplete(sessionId: string) {
+    transcribeProgressLabel.textContent = "Transcription complete!";
+    transcribeProgressPct.textContent = "100%";
+    transcribeProgressBar.textContent = buildBlockBar(100);
+
+    try {
+      const result = await getTranscriptResult(sessionId);
+      currentTranscript = result;
+      renderTranscriptInAudio(result);
+    } catch { }
+
+    setTimeout(() => {
+      transcriptionSection.classList.add("hidden");
+    }, 800);
+  }
+
+  function onTranscriptionError(msg: string) {
+    transcribeProgressWrap.classList.add("hidden");
+    transcribeError.textContent = msg;
+    transcribeError.classList.remove("hidden");
+    btnTranscribe.disabled = false;
   }
 
   async function initExtraction(sessionId: string, imgMeta: SessionImageMetadata | null = null) {
@@ -1721,6 +2025,42 @@ const base = import.meta.env.BASE_URL;
   .upload-status.success { color: #22c55e; }
   .upload-status.error { color: var(--color-danger); }
 
+  .upload-session-id-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .upload-session-id-label {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    font-weight: 500;
+  }
+
+  .upload-session-id-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .upload-session-id-input {
+    flex: 1;
+    font-size: 0.85rem;
+    font-family: var(--font-mono, monospace);
+    padding: 0.45rem 0.7rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    outline: none;
+    transition: border-color 0.2s ease;
+  }
+
+  .upload-session-id-input:focus {
+    border-color: var(--color-text-muted);
+  }
+
   .status-msg {
     color: var(--color-text-muted);
     font-size: 0.9rem;
@@ -2349,8 +2689,9 @@ const base = import.meta.env.BASE_URL;
     border-top: none;
     border-radius: 0 0 var(--radius-sm) var(--radius-sm);
     animation: fadeIn 0.2s ease;
-    max-height: 350px;
+    max-height: 500px;
     overflow: hidden;
+    overflow-y: auto;
     display: flex;
     flex-direction: column;
   }
@@ -2500,6 +2841,135 @@ const base = import.meta.env.BASE_URL;
     font-family: inherit;
     font-size: inherit;
     color: inherit;
+  }
+
+
+  .transcription-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .transcription-model-select {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    font-size: 0.78rem;
+    padding: 0.35rem 0.5rem;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s ease;
+  }
+
+  .transcription-model-select:focus {
+    border-color: var(--color-primary);
+  }
+
+  :global(.transcript-display) {
+    margin-top: 0.75rem;
+    border-top: 1px solid var(--color-border);
+    padding-top: 0.75rem;
+  }
+
+  :global(.transcript-display.hidden) {
+    display: none !important;
+  }
+
+  :global(.transcript-header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  :global(.transcript-title) {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  :global(.transcript-meta) {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+  }
+
+  :global(.transcript-segments) {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-height: 200px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+  }
+
+  :global(.transcript-segments::-webkit-scrollbar) {
+    width: 5px;
+  }
+
+  :global(.transcript-segments::-webkit-scrollbar-thumb) {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  :global(.transcript-segment) {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.78rem;
+    border-bottom: 1px solid rgba(42, 42, 46, 0.3);
+    transition: background 0.15s ease;
+  }
+
+  :global(.transcript-segment:last-child) {
+    border-bottom: none;
+  }
+
+  :global(.transcript-segment:hover) {
+    background: var(--color-surface-hover);
+  }
+
+  :global(.transcript-segment.active) {
+    background: rgba(109, 93, 252, 0.1);
+    border-left: 2px solid var(--color-primary);
+  }
+
+  :global(.transcript-time) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--color-primary);
+    flex-shrink: 0;
+    cursor: pointer;
+    padding: 0.1rem 0.35rem;
+    border-radius: 3px;
+    transition: background 0.12s ease;
+    min-width: 2.8rem;
+    text-align: center;
+  }
+
+  :global(.transcript-time:hover) {
+    background: rgba(109, 93, 252, 0.15);
+  }
+
+  :global(.transcript-text) {
+    color: var(--color-text);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 600px) {
+    .transcription-controls {
+      flex-direction: column;
+      align-items: stretch;
+      width: 100%;
+    }
   }
 </style>
 

@@ -2,8 +2,9 @@ const API_URL = import.meta.env.PUBLIC_KE_AR_API_URL || "https://00224466.xyz/ap
 const API_KEY = import.meta.env.PUBLIC_KE_AR_API_KEY || "";
 
 const IMAGE_API_URL = API_URL.replace(/\/+$/, "") + "/images";
+const TRANSCRIPTION_API_URL = API_URL.replace(/\/+$/, "") + "/transcription";
 
-export { API_KEY, IMAGE_API_URL };
+export { API_KEY, IMAGE_API_URL, TRANSCRIPTION_API_URL };
 
 async function apiFetch(
   path: string,
@@ -92,9 +93,19 @@ export interface FileUploadState {
 
 export type FileProgressCallback = (states: FileUploadState[]) => void;
 
+export function extractSessionIdFromFilenames(files: File[]): string | null {
+  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  for (const f of files) {
+    const match = f.name.match(uuidRe);
+    if (match) return match[0];
+  }
+  return null;
+}
+
 export async function uploadSession(
   files: File[],
   onProgress?: FileProgressCallback,
+  sessionId?: string,
 ): Promise<void> {
   const states: FileUploadState[] = files.map((f) => ({
     name: f.name,
@@ -107,6 +118,9 @@ export async function uploadSession(
   const form = new FormData();
   for (const f of files) {
     form.append("files", f);
+  }
+  if (sessionId) {
+    form.append("session_id", sessionId);
   }
 
   return new Promise((resolve, reject) => {
@@ -379,3 +393,87 @@ export async function getFramesPaginated(
   if (!res.ok) throw new Error(`Frames fetch failed: ${res.status}`);
   return res.json();
 }
+
+async function transcriptionApiFetch(
+  path: string,
+  init: RequestInit = {},
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+  const raw = `${TRANSCRIPTION_API_URL}${path}`;
+  const url = API_KEY
+    ? raw + (raw.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(API_KEY)}`
+    : raw;
+  return fetch(url, {
+    ...init,
+    headers: {
+      "X-API-Key": API_KEY,
+      ...extraHeaders,
+    },
+  });
+}
+
+export interface TranscriptionCheck {
+  session_id: string;
+  audio_file_exists: boolean;
+  audio_filename: string | null;
+  transcript_exists: boolean;
+  transcript_filename: string | null;
+}
+
+export interface TranscriptionProgress {
+  status: "starting" | "processing" | "completed" | "error";
+  progress_percent: number;
+  current_step: string;
+  error: string | null;
+}
+
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface TranscriptResult {
+  session_id: string;
+  language: string;
+  duration_seconds: number;
+  segments: TranscriptSegment[];
+  full_text: string;
+}
+
+export async function checkTranscription(sessionId: string): Promise<TranscriptionCheck> {
+  const res = await transcriptionApiFetch(`/${encodeURIComponent(sessionId)}/check`);
+  if (!res.ok) throw new Error(`Transcription check failed: ${res.status}`);
+  return res.json();
+}
+
+export async function startTranscription(
+  sessionId: string,
+  model = "base",
+  background = false,
+): Promise<{ session_id: string; status: string; message: string }> {
+  const res = await transcriptionApiFetch(
+    `/${encodeURIComponent(sessionId)}/transcribe?model=${encodeURIComponent(model)}&background=${background}`,
+    { method: "POST" },
+  );
+  if (!res.ok) throw new Error(`Transcription start failed: ${res.status}`);
+  return res.json();
+}
+
+export function getTranscriptionStreamUrl(sessionId: string, model = "base"): string {
+  const base = `${TRANSCRIPTION_API_URL}/${encodeURIComponent(sessionId)}/transcribe/stream?model=${encodeURIComponent(model)}`;
+  return API_KEY ? `${base}&api_key=${encodeURIComponent(API_KEY)}` : base;
+}
+
+export async function getTranscriptionProgress(sessionId: string): Promise<TranscriptionProgress> {
+  const res = await transcriptionApiFetch(`/${encodeURIComponent(sessionId)}/progress`);
+  if (!res.ok) throw new Error(`Transcription progress failed: ${res.status}`);
+  return res.json();
+}
+
+export async function getTranscriptResult(sessionId: string): Promise<TranscriptResult> {
+  const res = await transcriptionApiFetch(`/${encodeURIComponent(sessionId)}/result`);
+  if (!res.ok) throw new Error(`Transcript fetch failed: ${res.status}`);
+  return res.json();
+}
+
