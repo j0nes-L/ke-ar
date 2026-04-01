@@ -1,10 +1,11 @@
 import { isAuthenticated } from "../../lib/auth";
 import { $ } from "./utils";
-import { blobCache, audioBlobCache } from "./state";
+import { audioBlobCache } from "./state";
 import { loadSessions } from "./list";
 import { loadDetail } from "./detail";
 import { resetExtractionUI } from "./extraction";
 import { resetTranscriptionUI } from "./transcription";
+import { cleanupGallery } from "./gallery";
 
 function getSessionIdFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -52,10 +53,6 @@ export function navigateTo(url: string) {
   }
 }
 
-function cleanupBlobCache() {
-  for (const url of blobCache.values()) URL.revokeObjectURL(url);
-  blobCache.clear();
-}
 
 function cleanupAudioCache() {
   for (const url of audioBlobCache.values()) URL.revokeObjectURL(url);
@@ -69,14 +66,9 @@ function cleanupAudioCache() {
 }
 
 function cleanupSessionData() {
-  cleanupBlobCache();
+  cleanupGallery();
   cleanupAudioCache();
-  $("detail-files")
-    .querySelectorAll(".file-expand-content")
-    .forEach((el) => {
-      el.innerHTML = "";
-      el.classList.add("hidden");
-    });
+  $("detail-files").innerHTML = "";
   resetExtractionUI();
   resetTranscriptionUI();
 }

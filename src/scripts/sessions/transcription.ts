@@ -6,36 +6,151 @@ import {
 } from "../../lib/api";
 import type { TranscriptResult } from "../../lib/api";
 import { setCurrentTranscript } from "./state";
-import { $, $btn, escapeHtml, formatDuration, formatTimestamp, buildBlockBar } from "./utils";
+import { escapeHtml, formatDuration, formatTimestamp, buildBlockBar } from "./utils";
+
+let activeTranscriptContainer: HTMLElement | null = null;
 
 export function resetTranscriptionUI() {
-  const transcriptionSection = $("transcription-section");
-  const btnTranscribe = $btn("btn-transcribe");
-  const transcribeInfo = $("transcribe-info");
-  const transcribeProgressWrap = $("transcribe-progress-wrap");
-  const transcribeProgressBar = $("transcribe-progress-bar");
-  const transcribeProgressPct = $("transcribe-progress-pct");
-  const transcribeProgressLabel = $("transcribe-progress-label");
-  const transcribeError = $("transcribe-error");
-
-  transcriptionSection.classList.add("hidden");
-  btnTranscribe.disabled = false;
-  transcribeInfo.classList.add("hidden");
-  transcribeInfo.textContent = "";
-  transcribeProgressWrap.classList.add("hidden");
-  transcribeProgressBar.textContent = "";
-  transcribeProgressPct.textContent = "0%";
-  transcribeProgressLabel.textContent = "Starting transcription\u2026";
-  transcribeError.classList.add("hidden");
-  transcribeError.textContent = "";
+  if (activeTranscriptContainer) {
+    activeTranscriptContainer.innerHTML = "";
+  }
+  activeTranscriptContainer = null;
   setCurrentTranscript(null);
 }
 
-export async function initTranscription(sessionId: string) {
-  resetTranscriptionUI();
+export function renderTranscriptInContainer(result: TranscriptResult, container: HTMLElement) {
+  container.innerHTML = "";
 
-  const transcriptionSection = $("transcription-section");
-  const transcribeInfo = $("transcribe-info");
+  const wrapper = document.createElement("div");
+  wrapper.className = "transcript-display";
+
+  const header = document.createElement("div");
+  header.className = "transcript-header";
+  header.innerHTML = `
+    <span class="transcript-title">Transcript</span>
+    <span class="transcript-meta">${escapeHtml(result.language.toUpperCase())} \u00b7 ${formatDuration(result.duration_seconds)} \u00b7 ${result.segments.length} Segments</span>
+  `;
+  wrapper.appendChild(header);
+
+  const segmentsWrap = document.createElement("div");
+  segmentsWrap.className = "transcript-segments";
+
+  for (const seg of result.segments) {
+    const segEl = document.createElement("div");
+    segEl.className = "transcript-segment";
+    segEl.innerHTML = `
+      <span class="transcript-time" data-start="${seg.start}">${formatTimestamp(seg.start)}</span>
+      <span class="transcript-text">${escapeHtml(seg.text.trim())}</span>
+    `;
+    const timeEl = segEl.querySelector(".transcript-time") as HTMLElement;
+    timeEl.addEventListener("click", () => {
+      // Find the closest audio element in the accordion content
+      const accordionContent = container.closest(".accordion-content-inner");
+      const audio = accordionContent?.querySelector("audio") as HTMLAudioElement | null;
+      if (audio) {
+        audio.currentTime = seg.start;
+        if (audio.paused) {
+          audio.play();
+          const pb = accordionContent?.querySelector(".audio-play-btn");
+          if (pb) {
+            pb.querySelector(".audio-icon-play")!.classList.add("hidden");
+            pb.querySelector(".audio-icon-pause")!.classList.remove("hidden");
+          }
+        }
+      }
+    });
+    segmentsWrap.appendChild(segEl);
+  }
+
+  wrapper.appendChild(segmentsWrap);
+  container.appendChild(wrapper);
+
+  // Sync highlight with audio playback
+  const accordionContent = container.closest(".accordion-content-inner");
+  const audio = accordionContent?.querySelector("audio") as HTMLAudioElement | null;
+  if (audio) {
+    audio.addEventListener("timeupdate", () => {
+      const currentTime = audio.currentTime;
+      segmentsWrap.querySelectorAll(".transcript-segment").forEach((el, i) => {
+        const seg = result.segments[i];
+        const isActive = currentTime >= seg.start && currentTime < seg.end;
+        el.classList.toggle("active", isActive);
+        if (isActive) {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      });
+    });
+  }
+}
+
+function buildTranscriptionUI(container: HTMLElement): {
+  section: HTMLDivElement;
+  btnTranscribe: HTMLButtonElement;
+  modelSelect: HTMLSelectElement;
+  transcribeInfo: HTMLParagraphElement;
+  progressWrap: HTMLDivElement;
+  progressLabel: HTMLSpanElement;
+  progressPct: HTMLSpanElement;
+  progressBar: HTMLDivElement;
+  transcribeError: HTMLParagraphElement;
+} {
+  const section = document.createElement("div");
+  section.className = "extraction-section";
+
+  section.innerHTML = `
+    <div class="extraction-header">
+      <h3 class="extraction-title">Transcription</h3>
+      <div class="transcription-controls">
+        <select class="transcription-model-select">
+          <option value="tiny">tiny – Very fast</option>
+          <option value="base" selected>base – Standard</option>
+          <option value="small">small – Good Balance</option>
+          <option value="medium">medium – High Quality</option>
+          <option value="large">large – Best Quality</option>
+        </select>
+        <button class="btn btn-primary btn-sm transcribe-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="23"></line>
+            <line x1="8" y1="23" x2="16" y2="23"></line>
+          </svg>
+          Transcribe
+        </button>
+      </div>
+    </div>
+    <p class="extraction-info hidden"></p>
+    <div class="extract-progress-wrap hidden">
+      <div class="extract-progress-header">
+        <span class="transcribe-progress-label">Starting transcription\u2026</span>
+        <span class="transcribe-progress-pct">0%</span>
+      </div>
+      <div class="transcribe-progress-bar extract-progress-bar"></div>
+    </div>
+    <p class="extraction-error hidden"></p>
+  `;
+
+  container.appendChild(section);
+
+  return {
+    section,
+    btnTranscribe: section.querySelector(".transcribe-btn") as HTMLButtonElement,
+    modelSelect: section.querySelector(".transcription-model-select") as HTMLSelectElement,
+    transcribeInfo: section.querySelector(".extraction-info") as HTMLParagraphElement,
+    progressWrap: section.querySelector(".extract-progress-wrap") as HTMLDivElement,
+    progressLabel: section.querySelector(".transcribe-progress-label") as HTMLSpanElement,
+    progressPct: section.querySelector(".transcribe-progress-pct") as HTMLSpanElement,
+    progressBar: section.querySelector(".transcribe-progress-bar") as HTMLDivElement,
+    transcribeError: section.querySelector(".extraction-error") as HTMLParagraphElement,
+  };
+}
+
+export async function initTranscription(
+  sessionId: string,
+  transcriptContainer: HTMLElement,
+) {
+  resetTranscriptionUI();
+  activeTranscriptContainer = transcriptContainer;
 
   try {
     const check = await checkTranscription(sessionId);
@@ -48,196 +163,126 @@ export async function initTranscription(sessionId: string) {
       try {
         const result = await getTranscriptResult(sessionId);
         setCurrentTranscript(result);
-        renderTranscriptInAudio(result);
+        renderTranscriptInContainer(result, transcriptContainer);
       } catch {}
       return;
     }
 
-    transcriptionSection.classList.remove("hidden");
-    transcribeInfo.textContent = `Audio file "${check.audio_filename}" available for transcription.`;
-    transcribeInfo.classList.remove("hidden");
+    // No transcript yet → show transcription UI
+    const ui = buildTranscriptionUI(transcriptContainer);
+    ui.transcribeInfo.textContent = `Audio file "${check.audio_filename}" available for transcription.`;
+    ui.transcribeInfo.classList.remove("hidden");
+
+    ui.btnTranscribe.addEventListener("click", () => {
+      startTranscriptionProcess(sessionId, ui, transcriptContainer);
+    });
   } catch {}
 }
 
-export function renderTranscriptInAudio(result: TranscriptResult) {
-  const detailFiles = $("detail-files");
-  const transcriptWraps = detailFiles.querySelectorAll<HTMLElement>(".transcript-display");
-  transcriptWraps.forEach((wrap) => {
-    wrap.classList.remove("hidden");
-    wrap.innerHTML = "";
+async function startTranscriptionProcess(
+  sessionId: string,
+  ui: ReturnType<typeof buildTranscriptionUI>,
+  transcriptContainer: HTMLElement,
+) {
+  ui.btnTranscribe.disabled = true;
+  ui.transcribeError.classList.add("hidden");
+  ui.progressWrap.classList.remove("hidden");
+  ui.progressBar.textContent = buildBlockBar(0);
+  ui.progressPct.textContent = "0%";
+  ui.progressLabel.textContent = "Starting transcription\u2026";
 
-    const header = document.createElement("div");
-    header.className = "transcript-header";
-    header.innerHTML = `
-      <span class="transcript-title">Transcript</span>
-      <span class="transcript-meta">${escapeHtml(result.language.toUpperCase())} \u00b7 ${formatDuration(result.duration_seconds)} \u00b7 ${result.segments.length} Segmente</span>
-    `;
-    wrap.appendChild(header);
+  const model = ui.modelSelect.value;
 
-    const segmentsWrap = document.createElement("div");
-    segmentsWrap.className = "transcript-segments";
+  const updateProgress = (data: {
+    progress_percent?: number;
+    current_step?: string;
+    status?: string;
+  }) => {
+    const pct = Math.round(data.progress_percent ?? 0);
+    ui.progressPct.textContent = `${pct}%`;
+    ui.progressBar.textContent = buildBlockBar(pct);
+    if (data.current_step) {
+      ui.progressLabel.textContent = data.current_step;
+    } else if (data.status) {
+      ui.progressLabel.textContent = data.status === "processing" ? "Transcribing audio\u2026" : data.status;
+    }
+  };
 
-    for (const seg of result.segments) {
-      const segEl = document.createElement("div");
-      segEl.className = "transcript-segment";
-      segEl.innerHTML = `
-        <span class="transcript-time" data-start="${seg.start}">${formatTimestamp(seg.start)}</span>
-        <span class="transcript-text">${escapeHtml(seg.text.trim())}</span>
-      `;
-      const timeEl = segEl.querySelector(".transcript-time") as HTMLElement;
-      timeEl.addEventListener("click", () => {
-        const audio = wrap.closest(".file-expand-content")?.querySelector("audio") as HTMLAudioElement | null;
-        if (audio) {
-          audio.currentTime = seg.start;
-          if (audio.paused) {
-            audio.play();
-            const pb = wrap.closest(".file-expand-content")?.querySelector(".audio-play-btn");
-            if (pb) {
-              pb.querySelector(".audio-icon-play")!.classList.add("hidden");
-              pb.querySelector(".audio-icon-pause")!.classList.remove("hidden");
-            }
-          }
+  const onComplete = async () => {
+    ui.progressLabel.textContent = "Transcription complete!";
+    ui.progressPct.textContent = "100%";
+    ui.progressBar.textContent = buildBlockBar(100);
+
+    try {
+      const result = await getTranscriptResult(sessionId);
+      setCurrentTranscript(result);
+
+      setTimeout(() => {
+        transcriptContainer.innerHTML = "";
+        renderTranscriptInContainer(result, transcriptContainer);
+      }, 800);
+    } catch {
+      setTimeout(() => {
+        ui.section.remove();
+      }, 800);
+    }
+  };
+
+  const onError = (msg: string) => {
+    ui.progressWrap.classList.add("hidden");
+    ui.transcribeError.textContent = msg;
+    ui.transcribeError.classList.remove("hidden");
+    ui.btnTranscribe.disabled = false;
+  };
+
+  const pollTranscription = () => {
+    const poll = async () => {
+      try {
+        const progress = await getTranscriptionProgress(sessionId);
+        updateProgress(progress);
+        if (progress.status === "completed") {
+          await onComplete();
+          return;
         }
-      });
-      segmentsWrap.appendChild(segEl);
-    }
-
-    wrap.appendChild(segmentsWrap);
-
-    const audio = wrap.closest(".file-expand-content")?.querySelector("audio") as HTMLAudioElement | null;
-    if (audio) {
-      audio.addEventListener("timeupdate", () => {
-        const currentTime = audio.currentTime;
-        segmentsWrap.querySelectorAll(".transcript-segment").forEach((el, i) => {
-          const seg = result.segments[i];
-          const isActive = currentTime >= seg.start && currentTime < seg.end;
-          el.classList.toggle("active", isActive);
-          if (isActive) {
-            el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        if (progress.status === "error") {
+          onError(progress.error || "Transcription failed");
+          return;
+        }
+        setTimeout(poll, 2000);
+      } catch {
+        try {
+          const check = await checkTranscription(sessionId);
+          if (check.transcript_exists) {
+            await onComplete();
+            return;
           }
-        });
-      });
-    }
-  });
-}
-
-async function startTranscriptionProcess(sessionId: string) {
-  const btnTranscribe = $btn("btn-transcribe");
-  const transcribeError = $("transcribe-error");
-  const transcribeProgressWrap = $("transcribe-progress-wrap");
-  const transcribeProgressBar = $("transcribe-progress-bar");
-  const transcribeProgressPct = $("transcribe-progress-pct");
-  const transcribeProgressLabel = $("transcribe-progress-label");
-  const transcriptionModelSelect = document.getElementById("transcription-model") as HTMLSelectElement;
-
-  btnTranscribe.disabled = true;
-  transcribeError.classList.add("hidden");
-  transcribeProgressWrap.classList.remove("hidden");
-  transcribeProgressBar.textContent = buildBlockBar(0);
-  transcribeProgressPct.textContent = "0%";
-  transcribeProgressLabel.textContent = "Starting transcription\u2026";
-
-  const model = transcriptionModelSelect.value;
+        } catch {}
+        onError("Lost connection to transcription progress.");
+      }
+    };
+    setTimeout(poll, 2000);
+  };
 
   try {
     await startTranscription(sessionId, model, true);
-    pollTranscription(sessionId);
+    pollTranscription();
   } catch {
     try {
       await startTranscription(sessionId, model, false);
-      onTranscriptionComplete(sessionId);
+      await onComplete();
     } catch (syncErr) {
-      onTranscriptionError((syncErr as Error).message);
+      onError((syncErr as Error).message);
     }
   }
-}
-
-function updateTranscriptionProgress(data: {
-  progress_percent?: number;
-  current_step?: string;
-  status?: string;
-}) {
-  const transcribeProgressPct = $("transcribe-progress-pct");
-  const transcribeProgressBar = $("transcribe-progress-bar");
-  const transcribeProgressLabel = $("transcribe-progress-label");
-
-  const pct = Math.round(data.progress_percent ?? 0);
-  transcribeProgressPct.textContent = `${pct}%`;
-  transcribeProgressBar.textContent = buildBlockBar(pct);
-  if (data.current_step) {
-    transcribeProgressLabel.textContent = data.current_step;
-  } else if (data.status) {
-    transcribeProgressLabel.textContent = data.status === "processing" ? "Transcribing audio\u2026" : data.status;
-  }
-}
-
-async function pollTranscription(sessionId: string) {
-  const poll = async () => {
-    try {
-      const progress = await getTranscriptionProgress(sessionId);
-      updateTranscriptionProgress(progress);
-      if (progress.status === "completed") {
-        onTranscriptionComplete(sessionId);
-        return;
-      }
-      if (progress.status === "error") {
-        onTranscriptionError(progress.error || "Transcription failed");
-        return;
-      }
-      setTimeout(poll, 2000);
-    } catch {
-      try {
-        const check = await checkTranscription(sessionId);
-        if (check.transcript_exists) {
-          onTranscriptionComplete(sessionId);
-          return;
-        }
-      } catch {}
-      onTranscriptionError("Lost connection to transcription progress.");
-    }
-  };
-  setTimeout(poll, 2000);
-}
-
-async function onTranscriptionComplete(sessionId: string) {
-  const transcribeProgressLabel = $("transcribe-progress-label");
-  const transcribeProgressPct = $("transcribe-progress-pct");
-  const transcribeProgressBar = $("transcribe-progress-bar");
-  const transcriptionSection = $("transcription-section");
-
-  transcribeProgressLabel.textContent = "Transcription complete!";
-  transcribeProgressPct.textContent = "100%";
-  transcribeProgressBar.textContent = buildBlockBar(100);
-
-  try {
-    const result = await getTranscriptResult(sessionId);
-    setCurrentTranscript(result);
-    renderTranscriptInAudio(result);
-  } catch {}
-
-  setTimeout(() => {
-    transcriptionSection.classList.add("hidden");
-  }, 800);
-}
-
-function onTranscriptionError(msg: string) {
-  const transcribeProgressWrap = $("transcribe-progress-wrap");
-  const transcribeError = $("transcribe-error");
-  const btnTranscribe = $btn("btn-transcribe");
-
-  transcribeProgressWrap.classList.add("hidden");
-  transcribeError.textContent = msg;
-  transcribeError.classList.remove("hidden");
-  btnTranscribe.disabled = false;
 }
 
 export function initTranscriptionEvents() {
-  const btnTranscribe = $btn("btn-transcribe");
-  btnTranscribe.addEventListener("click", () => {
-    const params = new URLSearchParams(window.location.search);
-    const sid = params.get("id");
-    if (!sid) return;
-    startTranscriptionProcess(sid);
-  });
+  // No-op: events are now bound dynamically in initTranscription
 }
 
+// Keep old renderTranscriptInAudio for backward compat - delegates to new function
+export function renderTranscriptInAudio(result: TranscriptResult) {
+  if (activeTranscriptContainer) {
+    renderTranscriptInContainer(result, activeTranscriptContainer);
+  }
+}

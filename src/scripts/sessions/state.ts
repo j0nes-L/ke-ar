@@ -20,6 +20,7 @@ export let currentTranscript: TranscriptResult | null = null;
 
 export const blobCache = new Map<string, string>();
 export const audioBlobCache = new Map<string, string>();
+export let preloadAbort: AbortController | null = null;
 
 export let pendingUploadFiles: File[] = [];
 
@@ -33,4 +34,5 @@ export function setGalleryCurrentIdx(v: number) { galleryCurrentIdx = v; }
 export function setExtractionEventSource(v: EventSource | null) { extractionEventSource = v; }
 export function setCurrentTranscript(v: TranscriptResult | null) { currentTranscript = v; }
 export function setPendingUploadFiles(v: File[]) { pendingUploadFiles = v; }
+export function setPreloadAbort(v: AbortController | null) { preloadAbort = v; }
 
