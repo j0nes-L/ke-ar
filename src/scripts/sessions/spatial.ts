@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { getFramesPaginated } from "../../lib/api";
+import {
+  getFramesPaginated,
+  getFrameMetadata,
+  getColorImageUrl,
+  getDepthImageUrl,
+} from "../../lib/api";
 import type { FrameSummary } from "../../lib/api";
 
 interface CameraPoint {
@@ -18,6 +23,8 @@ const CAMERA_COLOR_SELECTED = 0xffffff;
 const CAMERA_COLOR_DIMMED = 0x6d5dfc;
 const FOV_COLOR = 0x6d5dfc;
 const DEPTH_RAY_COLOR = 0x22c55e;
+const HAND_LEFT_COLOR = 0x9333ea;
+const HAND_RIGHT_COLOR = 0xc084fc;
 const BG_COLOR = 0x111113;
 const GRID_COLOR = 0x2a2a2e;
 const GRID_CENTER_COLOR = 0x3a3a3e;
@@ -384,44 +391,49 @@ function updateTooltip(
   const lines: string[] = [];
   lines.push(`<strong>Frame ${f.frame_index}</strong>`);
   lines.push(`Time: ${(f.timestampMs / 1000).toFixed(2)}s`);
-  if (f.distanceAtCenter > 0) lines.push(`<span style="color:#22c55e">⦿</span> Depth: ${f.distanceAtCenter.toFixed(3)}m`);
+  if (f.distanceAtCenter > 0) lines.push(`<span style="color:#22c55e">â¦¿</span> Depth: ${f.distanceAtCenter.toFixed(3)}m`);
   const flags: string[] = [];
   if (f.hasColor) flags.push("Color");
   if (f.hasDepth) flags.push("Depth");
   if (f.hasTracking) flags.push("Tracking");
   if (f.leftHandTracked) flags.push("L-Hand");
   if (f.rightHandTracked) flags.push("R-Hand");
-  if (flags.length) lines.push(flags.join(" · "));
+  if (flags.length) lines.push(flags.join(" Â· "));
   tip.innerHTML = lines.join("<br>");
   tip.classList.remove("hidden");
   tip.style.left = `${x + 14}px`;
   tip.style.top = `${y + 14}px`;
 }
 
-function createInfoPanel(point: CameraPoint): string {
+function getFrameFilename(frameIndex: number): string {
+  return `frame_${String(frameIndex).padStart(4, "0")}.png`;
+}
+
+function createInfoPanel(point: CameraPoint, sessionId: string): string {
   const f = point.frame;
   const p = point.position;
+  const filename = getFrameFilename(f.frame_index);
+  const colorUrl = getColorImageUrl(sessionId, filename);
+  const depthUrl = getDepthImageUrl(sessionId, filename);
+  const hasImage = f.hasColor || f.hasDepth;
+
   let html = `<div class="spatial-info-panel">`;
   html += `<div class="spatial-info-title">Frame ${f.frame_index}</div>`;
-  html += `<div class="spatial-info-row"><span>Time</span><span>${(f.timestampMs / 1000).toFixed(3)}s</span></div>`;
-  html += `<div class="spatial-info-row"><span>Position</span><span>${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)}</span></div>`;
+  html += `<div class="spatial-info-row"><span>Time</span><span>${(f.timestampMs / 1000).toFixed(2)}s</span></div>`;
+  html += `<div class="spatial-info-row"><span>Position</span><span>${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}</span></div>`;
   if (f.distanceAtCenter > 0) {
-    const hitWorld = point.position.clone().add(point.forward.clone().multiplyScalar(f.distanceAtCenter));
-    html += `<div class="spatial-info-row spatial-info-depth"><span>⦿ Depth at Center</span><span>${f.distanceAtCenter.toFixed(3)}m</span></div>`;
-    html += `<div class="spatial-info-row"><span>Hit Point</span><span>${hitWorld.x.toFixed(3)}, ${hitWorld.y.toFixed(3)}, ${hitWorld.z.toFixed(3)}</span></div>`;
+    html += `<div class="spatial-info-row spatial-info-depth"><span>â¦¿ Depth at Center</span><span>${f.distanceAtCenter.toFixed(2)}m</span></div>`;
   }
-  const flags: string[] = [];
-  if (f.hasColor) flags.push("Color");
-  if (f.hasDepth) flags.push("Depth");
-  if (f.hasTracking) flags.push("Tracking");
-  if (flags.length) {
-    html += `<div class="spatial-info-row"><span>Data</span><span>${flags.join(", ")}</span></div>`;
-  }
-  if (f.leftHandTracked || f.rightHandTracked) {
-    const hands: string[] = [];
-    if (f.leftHandTracked) hands.push("Left");
-    if (f.rightHandTracked) hands.push("Right");
-    html += `<div class="spatial-info-row"><span>Hands</span><span>${hands.join(", ")}</span></div>`;
+
+  if (hasImage) {
+    html += `<div class="spatial-info-image-wrap">`;
+    html += `<div class="spatial-info-image-tabs">`;
+    if (f.hasColor) html += `<button class="spatial-info-tab active" data-img-type="color">Color</button>`;
+    if (f.hasDepth) html += `<button class="spatial-info-tab${!f.hasColor ? " active" : ""}" data-img-type="depth">Depth</button>`;
+    html += `</div>`;
+    const initialUrl = f.hasColor ? colorUrl : depthUrl;
+    html += `<img class="spatial-info-image" src="${initialUrl}" alt="Frame ${f.frame_index}" data-color-url="${colorUrl}" data-depth-url="${depthUrl}" />`;
+    html += `</div>`;
   }
   html += `</div>`;
   return html;
@@ -442,6 +454,353 @@ function createPathLine(points: CameraPoint[]): THREE.Line {
   return new THREE.Line(geo, mat);
 }
 
+const HAND_JOINT_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17],
+];
+
+const OVR_BONE_PARENTS: number[] = [
+  -1, 0, 0, 2, 3, 4, 0, 6, 7, 0, 9, 10, 0, 12, 13, 0, 15, 16, 17, 5, 8, 11, 14, 18,
+];
+const OVR_BONE_LENGTHS: number[] = [
+  0.0, 0.0, 0.025, 0.038, 0.028, 0.023,
+  0.075, 0.038, 0.024,
+  0.07, 0.043, 0.026,
+  0.065, 0.04, 0.025,
+  0.025, 0.05, 0.028, 0.02,
+  0.02, 0.02, 0.02, 0.02, 0.02,
+];
+const OVR_TO_OPENXR: number[] = [
+  0, 2, 3, 4, 19, 6, 7, 8, 20, 9, 10, 11, 21, 12, 13, 14, 22, 16, 17, 18, 23,
+];
+
+function computeOvrJointPositions(
+  rootPos: THREE.Vector3,
+  boneRotations: number[],
+  handScale: number,
+): THREE.Vector3[] {
+  const numBones = 24;
+  const worldPositions: THREE.Vector3[] = new Array(numBones);
+  const worldRotations: THREE.Quaternion[] = new Array(numBones);
+
+  const ovrRootPos = new THREE.Vector3(rootPos.x, rootPos.y, -rootPos.z);
+
+  const ovrBoneQuats: THREE.Quaternion[] = [];
+  for (let i = 0; i < numBones; i++) {
+    const off = i * 4;
+    if (off + 3 < boneRotations.length) {
+      ovrBoneQuats.push(new THREE.Quaternion(
+        boneRotations[off],
+        -boneRotations[off + 1],
+        -boneRotations[off + 2],
+        boneRotations[off + 3],
+      ));
+    } else {
+      ovrBoneQuats.push(new THREE.Quaternion());
+    }
+  }
+
+  const boneDir = new THREE.Vector3(1, 0, 0);
+
+  for (let i = 0; i < numBones; i++) {
+    const parentIdx = OVR_BONE_PARENTS[i];
+    if (parentIdx < 0) {
+      worldPositions[i] = ovrRootPos.clone();
+      worldRotations[i] = ovrBoneQuats[i].clone();
+    } else {
+      worldRotations[i] = ovrBoneQuats[i].clone();
+      const len = OVR_BONE_LENGTHS[i] * handScale;
+      const offset = boneDir.clone().multiplyScalar(len).applyQuaternion(worldRotations[parentIdx]);
+      worldPositions[i] = worldPositions[parentIdx].clone().add(offset);
+    }
+  }
+  return worldPositions.map(p => new THREE.Vector3(p.x, p.y, -p.z));
+}
+
+function tryParseOvrHand(handData: Record<string, unknown>): THREE.Vector3[] | null {
+  if (!handData || typeof handData !== "object") return null;
+  if (handData.isTracked === false) return null;
+  const rootPosRaw = tryVec3(handData.rootPosition);
+  const rootRotRaw = tryQuat(handData.rootRotation);
+  const boneRots = handData.boneRotations;
+  if (!rootPosRaw || !rootRotRaw || !Array.isArray(boneRots)) return null;
+  if (boneRots.length < 96) return null;
+  const handScale = typeof handData.handScale === "number" ? handData.handScale : 1.0;
+  const allPositions = computeOvrJointPositions(rootPosRaw, boneRots as number[], handScale);
+  const joints: THREE.Vector3[] = [];
+  for (const ovrIdx of OVR_TO_OPENXR) {
+    joints.push(allPositions[ovrIdx]);
+  }
+  return joints;
+}
+
+function parseHandJoints(trackingData: Record<string, unknown>, hand: "left" | "right"): THREE.Vector3[] | null {
+  if (!trackingData) return null;
+
+  const lcHand = hand;
+  const ucHand = hand === "left" ? "Left" : "Right";
+
+  const ovrKeys = [lcHand + "Hand", ucHand + "Hand", lcHand + "_hand", lcHand, ucHand];
+  for (const key of ovrKeys) {
+    const val = trackingData[key];
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      const handData = val as Record<string, unknown>;
+      if (handData.boneRotations && Array.isArray(handData.boneRotations)) {
+        const joints = tryParseOvrHand(handData);
+        if (joints) return joints;
+      }
+    }
+  }
+
+  const searchKeys = [
+    `${lcHand}HandJointPositions`,
+    `${ucHand}HandJointPositions`,
+    `${lcHand}_hand_joint_positions`,
+    `${lcHand}HandPositions`,
+    `${ucHand}HandPositions`,
+    `${lcHand}_hand_positions`,
+    `${lcHand}HandJoints`,
+    `${ucHand}HandJoints`,
+    `${lcHand}_hand_joints`,
+    `${lcHand}Hand`,
+    `${ucHand}Hand`,
+    `${lcHand}_hand`,
+    `${lcHand}Joints`,
+    `${ucHand}Joints`,
+    `${lcHand}_joints`,
+    `${ucHand}`,
+    `${lcHand}`,
+    `${lcHand}HandData`,
+    `${ucHand}HandData`,
+    `${lcHand}_hand_data`,
+  ];
+
+  function extractJointPosition(joint: unknown): THREE.Vector3 | null {
+    if (!joint) return null;
+    const direct = tryVec3(joint);
+    if (direct) return direct;
+    if (typeof joint !== "object" || Array.isArray(joint)) return null;
+    const j = joint as Record<string, unknown>;
+    for (const posKey of [
+      "Position", "position", "Pos", "pos",
+      "Translation", "translation",
+      "localPosition", "LocalPosition",
+      "worldPosition", "WorldPosition",
+    ]) {
+      const p = tryVec3(j[posKey]);
+      if (p) return p;
+    }
+    for (const wrapKey of ["pose", "Pose", "transform", "Transform"]) {
+      if (j[wrapKey] && typeof j[wrapKey] === "object") {
+        const inner = j[wrapKey] as Record<string, unknown>;
+        for (const posKey of ["Position", "position", "Pos", "pos", "Translation", "translation"]) {
+          const p = tryVec3(inner[posKey]);
+          if (p) return p;
+        }
+        const p = tryVec3(inner);
+        if (p) return p;
+      }
+    }
+    return null;
+  }
+
+  function tryParseJointArray(arr: unknown[]): THREE.Vector3[] | null {
+    const joints: THREE.Vector3[] = [];
+    for (const item of arr) {
+      const p = extractJointPosition(item);
+      if (p) joints.push(unityToThreePos(p));
+    }
+    if (joints.length >= 5) return joints;
+    return null;
+  }
+
+  function findJointData(obj: unknown, depth: number): THREE.Vector3[] | null {
+    if (depth > 5 || !obj || typeof obj !== "object") return null;
+    const record = obj as Record<string, unknown>;
+
+    for (const key of searchKeys) {
+      const val = record[key];
+      if (!val) continue;
+      if (Array.isArray(val) && val.length >= 5) {
+        const parsed = tryParseJointArray(val);
+        if (parsed) return parsed;
+      }
+      if (typeof val === "object" && !Array.isArray(val)) {
+        const inner = val as Record<string, unknown>;
+        for (const innerKey of [
+          "joints", "Joints", "JointPositions", "jointPositions",
+          "joint_positions", "positions", "Positions",
+          "data", "Data", "items", "Items",
+        ]) {
+          if (Array.isArray(inner[innerKey]) && (inner[innerKey] as unknown[]).length >= 5) {
+            const parsed = tryParseJointArray(inner[innerKey] as unknown[]);
+            if (parsed) return parsed;
+          }
+        }
+        const vals = Object.values(inner);
+        if (vals.length >= 5) {
+          const parsed = tryParseJointArray(vals);
+          if (parsed) return parsed;
+        }
+      }
+    }
+
+    const handPattern = new RegExp(`${lcHand}.*(?:hand|joint|position)`, "i");
+    for (const [key, val] of Object.entries(record)) {
+      if (!handPattern.test(key)) continue;
+      if (Array.isArray(val) && val.length >= 5) {
+        const parsed = tryParseJointArray(val);
+        if (parsed) return parsed;
+      }
+    }
+
+    for (const [_key, val] of Object.entries(record)) {
+      if (val && typeof val === "object" && !Array.isArray(val)) {
+        const found = findJointData(val, depth + 1);
+        if (found) return found;
+      }
+    }
+
+    return null;
+  }
+
+  return findJointData(trackingData, 0);
+}
+
+const HAND_SKIN_TRIANGLES = [
+  [0, 5, 9], [0, 9, 13], [0, 13, 17],
+  [5, 9, 10], [5, 6, 10], [9, 13, 14], [9, 10, 14], [13, 17, 18], [13, 14, 18],
+  [0, 1, 5], [1, 2, 5],
+  [5, 6, 9], [6, 9, 10],
+  [9, 10, 13], [10, 13, 14],
+  [13, 14, 17], [14, 17, 18],
+];
+
+function createFingerTube(
+  joints: THREE.Vector3[],
+  indices: number[],
+  radius: number,
+  mat: THREE.MeshStandardMaterial,
+): THREE.Mesh | null {
+  const pts: THREE.Vector3[] = [];
+  for (const idx of indices) {
+    if (idx >= joints.length) return null;
+    pts.push(joints[idx]);
+  }
+  if (pts.length < 2) return null;
+
+  const curve = new THREE.CatmullRomCurve3(pts, false, "catmullrom", 0.5);
+  const tubeGeo = new THREE.TubeGeometry(curve, pts.length * 4, radius, 6, false);
+  return new THREE.Mesh(tubeGeo, mat);
+}
+
+function createHandMesh(joints: THREE.Vector3[], color: number, meshScale: number): THREE.Group {
+  const group = new THREE.Group();
+
+  const skinMat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.15,
+    metalness: 0.1,
+    roughness: 0.7,
+    transparent: true,
+    opacity: 0.55,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+
+  const skinVerts: number[] = [];
+  for (const [a, b, c] of HAND_SKIN_TRIANGLES) {
+    if (a < joints.length && b < joints.length && c < joints.length) {
+      skinVerts.push(
+        joints[a].x, joints[a].y, joints[a].z,
+        joints[b].x, joints[b].y, joints[b].z,
+        joints[c].x, joints[c].y, joints[c].z,
+      );
+    }
+  }
+  if (skinVerts.length > 0) {
+    const skinGeo = new THREE.BufferGeometry();
+    skinGeo.setAttribute("position", new THREE.Float32BufferAttribute(skinVerts, 3));
+    skinGeo.computeVertexNormals();
+    group.add(new THREE.Mesh(skinGeo, skinMat));
+  }
+
+  const tubeMat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.3,
+    metalness: 0.1,
+    roughness: 0.6,
+    transparent: true,
+    opacity: 0.85,
+  });
+  const fingerChains = [
+    [0, 1, 2, 3, 4],
+    [0, 5, 6, 7, 8],
+    [0, 9, 10, 11, 12],
+    [0, 13, 14, 15, 16],
+    [0, 17, 18, 19, 20],
+  ];
+  const tubeRadius = meshScale * 0.025;
+  for (const chain of fingerChains) {
+    const tube = createFingerTube(joints, chain, tubeRadius, tubeMat);
+    if (tube) group.add(tube);
+  }
+
+  const jointGeo = new THREE.SphereGeometry(meshScale * 0.035, 8, 8);
+  const jointMat = new THREE.MeshStandardMaterial({
+    color,
+    emissive: color,
+    emissiveIntensity: 0.4,
+    metalness: 0.2,
+    roughness: 0.5,
+    transparent: true,
+    opacity: 0.9,
+  });
+  for (const pos of joints) {
+    const sphere = new THREE.Mesh(jointGeo, jointMat);
+    sphere.position.copy(pos);
+    group.add(sphere);
+  }
+
+  for (const [a, b] of HAND_JOINT_CONNECTIONS) {
+    if (a < joints.length && b < joints.length) {
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([joints[a], joints[b]]);
+      const lineMat = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.7,
+      });
+      group.add(new THREE.Line(lineGeo, lineMat));
+    }
+  }
+
+  const tipIndices = [4, 8, 12, 16, 20];
+  const tipGeo = new THREE.SphereGeometry(meshScale * 0.05, 8, 8);
+  const tipMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    emissive: color,
+    emissiveIntensity: 0.6,
+    transparent: true,
+    opacity: 0.95,
+  });
+  for (const idx of tipIndices) {
+    if (idx < joints.length) {
+      const tip = new THREE.Mesh(tipGeo, tipMat);
+      tip.position.copy(joints[idx]);
+      group.add(tip);
+    }
+  }
+
+  group.name = `hand-${color === HAND_LEFT_COLOR ? "left" : "right"}`;
+  return group;
+}
+
 function applyVisualState(
   point: CameraPoint,
   mode: "default" | "hover" | "selected" | "dimmed",
@@ -454,26 +813,19 @@ function applyVisualState(
   if (!sphere) return;
 
   const sMat = sphere.material as THREE.MeshStandardMaterial;
-  const bMat = body?.material as THREE.MeshStandardMaterial | undefined;
-  const lMat = lens?.material as THREE.MeshStandardMaterial | undefined;
   const fMat = frustum?.material as THREE.LineBasicMaterial | undefined;
 
-  const showCamera = mode === "selected";
-
-  sphere.visible = !showCamera;
-  if (body) body.visible = showCamera;
-  if (lens) lens.visible = showCamera;
-  if (frustum) frustum.visible = showCamera;
+  if (body) body.visible = false;
+  if (lens) lens.visible = false;
+  sphere.visible = true;
+  if (frustum) frustum.visible = mode === "selected";
 
   switch (mode) {
     case "selected":
-      if (bMat) {
-        bMat.color.setHex(CAMERA_COLOR_SELECTED);
-        bMat.opacity = 1.0;
-        bMat.emissive.setHex(CAMERA_COLOR);
-        bMat.emissiveIntensity = 0.4;
-      }
-      if (lMat) { lMat.opacity = 1.0; }
+      sMat.color.setHex(CAMERA_COLOR_SELECTED);
+      sMat.opacity = 1.0;
+      sMat.emissive.setHex(CAMERA_COLOR);
+      sMat.emissiveIntensity = 0.4;
       if (fMat) {
         fMat.color.setHex(CAMERA_COLOR_SELECTED);
         fMat.opacity = 0.6;
@@ -511,12 +863,15 @@ export async function initSpatialViewer(
   container.innerHTML = `<div class="spatial-viewer-wrap">
     <div class="spatial-canvas-wrap">
       <canvas class="spatial-canvas"></canvas>
-      <div class="spatial-loading"><span class="spinner"></span> Loading spatial data…</div>
+      <div class="spatial-loading"><span class="spinner"></span> Loading spatial dataâ€¦</div>
     </div>
     <div class="spatial-sidebar">
       <div class="spatial-sidebar-header">
-        <span class="spatial-sidebar-title">Camera Positions</span>
-        <span class="spatial-sidebar-count"></span>
+        <span class="spatial-sidebar-title">Frames</span>
+        <div class="spatial-sidebar-actions">
+          <button class="spatial-play-btn" title="Play through all frames">▶</button>
+          <span class="spatial-sidebar-count"></span>
+        </div>
       </div>
       <div class="spatial-sidebar-content"></div>
     </div>
@@ -528,6 +883,7 @@ export async function initSpatialViewer(
   const loadingEl = wrap.querySelector(".spatial-loading") as HTMLDivElement;
   const sidebarCount = wrap.querySelector(".spatial-sidebar-count") as HTMLSpanElement;
   const sidebarContent = wrap.querySelector(".spatial-sidebar-content") as HTMLDivElement;
+  const playBtn = wrap.querySelector(".spatial-play-btn") as HTMLButtonElement;
   const tooltip = createTooltip();
   canvasWrap.appendChild(tooltip);
 
@@ -551,24 +907,12 @@ export async function initSpatialViewer(
     return;
   }
 
-  const firstWithPose = allFrames.find((f) => f.pose && typeof f.pose === "object" && Object.keys(f.pose).length > 0);
-  if (firstWithPose) {
-    console.log("[SpatialViewer] Sample pose:", JSON.stringify(firstWithPose.pose, null, 2));
-  }
-
   const cameraPoints: CameraPoint[] = [];
-  let parseFailCount = 0;
   for (const f of allFrames) {
-    if (!f.pose || typeof f.pose !== "object" || Object.keys(f.pose).length === 0) {
-      parseFailCount++;
-      continue;
-    }
+    if (!f.pose || typeof f.pose !== "object" || Object.keys(f.pose).length === 0) continue;
     const data = extractPoseData(f.pose);
-    if (!data) { parseFailCount++; continue; }
-    if (!isFinite(data.position.x) || !isFinite(data.position.y) || !isFinite(data.position.z)) {
-      parseFailCount++;
-      continue;
-    }
+    if (!data) continue;
+    if (!isFinite(data.position.x) || !isFinite(data.position.y) || !isFinite(data.position.z)) continue;
     cameraPoints.push({
       frame: f,
       position: data.position,
@@ -580,6 +924,7 @@ export async function initSpatialViewer(
   }
 
   if (cameraPoints.length === 0) {
+    const firstWithPose = allFrames.find((f) => f.pose && typeof f.pose === "object" && Object.keys(f.pose).length > 0);
     const samplePose = firstWithPose?.pose;
     const hint = samplePose
       ? `Pose keys: [${Object.keys(samplePose).join(", ")}]`
@@ -588,7 +933,6 @@ export async function initSpatialViewer(
     return;
   }
 
-  console.log(`[SpatialViewer] ${cameraPoints.length}/${allFrames.length} poses parsed (${parseFailCount} skipped)`);
 
   const bbox = new THREE.Box3();
   for (const p of cameraPoints) bbox.expandByPoint(p.position);
@@ -654,18 +998,17 @@ export async function initSpatialViewer(
 
 
   let activeDepthRay: THREE.Group | null = null;
+  let activeHandGroups: THREE.Group[] = [];
+  let isPlaying = false;
+  let playTimer: number | null = null;
+  const handDataCache = new Map<number, { left: THREE.Vector3[] | null; right: THREE.Vector3[] | null }>();
 
   loadingEl.classList.add("hidden");
 
   sidebarCount.textContent = `${cameraPoints.length}`;
   sidebarContent.innerHTML = cameraPoints.map((p, i) => {
-    const t = (p.frame.timestampMs / 1000).toFixed(2);
-    const depthBadge = p.frame.distanceAtCenter > 0
-      ? `<span class="spatial-sidebar-depth" title="Depth: ${p.frame.distanceAtCenter.toFixed(2)}m">⦿</span>`
-      : "";
     return `<button class="spatial-sidebar-item" data-idx="${i}">
-      <span class="spatial-sidebar-idx">${p.frame.frame_index}</span>
-      <span class="spatial-sidebar-right">${depthBadge}<span class="spatial-sidebar-time">${t}s</span></span>
+      <span class="spatial-sidebar-idx">Frame ${p.frame.frame_index}</span>
     </button>`;
   }).join("");
 
@@ -674,17 +1017,21 @@ export async function initSpatialViewer(
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
 
+  function disposeGroup(group: THREE.Group) {
+    group.traverse((obj) => {
+      if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
+      const mat = (obj as THREE.Mesh).material;
+      if (mat) {
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else (mat as THREE.Material).dispose();
+      }
+    });
+  }
+
   function updateDepthRay() {
     if (activeDepthRay) {
       scene.remove(activeDepthRay);
-      activeDepthRay.traverse((obj) => {
-        if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
-        const mat = (obj as THREE.Mesh).material;
-        if (mat) {
-          if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
-          else (mat as THREE.Material).dispose();
-        }
-      });
+      disposeGroup(activeDepthRay);
       activeDepthRay = null;
     }
     if (selectedIdx !== null) {
@@ -696,9 +1043,56 @@ export async function initSpatialViewer(
     }
   }
 
+  function clearHands() {
+    for (const g of activeHandGroups) {
+      scene.remove(g);
+      disposeGroup(g);
+    }
+    activeHandGroups = [];
+  }
+
+  async function updateHands() {
+    clearHands();
+    if (selectedIdx === null) return;
+    const point = cameraPoints[selectedIdx];
+    const f = point.frame;
+
+    if (!f.hasTracking && !f.leftHandTracked && !f.rightHandTracked) return;
+
+    try {
+      let cached = handDataCache.get(f.frame_index);
+      if (!cached) {
+        const meta = await getFrameMetadata(sessionId, f.frame_index);
+        if (!meta.tracking) {
+          cached = { left: null, right: null };
+        } else {
+          cached = {
+            left: parseHandJoints(meta.tracking, "left"),
+            right: parseHandJoints(meta.tracking, "right"),
+          };
+        }
+        handDataCache.set(f.frame_index, cached);
+      }
+
+      if (cached.left) {
+        const handGroup = createHandMesh(cached.left, HAND_LEFT_COLOR, scale);
+        scene.add(handGroup);
+        activeHandGroups.push(handGroup);
+      }
+
+      if (cached.right) {
+        const handGroup = createHandMesh(cached.right, HAND_RIGHT_COLOR, scale);
+        scene.add(handGroup);
+        activeHandGroups.push(handGroup);
+      }
+    } catch {
+    }
+  }
+
   function setSelected(idx: number | null) {
     selectedIdx = idx;
     updateDepthRay();
+    updateHands();
     updateVisuals();
     updateSidebar();
     updateInfoSidebar();
@@ -732,11 +1126,34 @@ export async function initSpatialViewer(
     const existing = wrap.querySelector(".spatial-info-panel");
     if (existing) existing.remove();
     if (selectedIdx !== null) {
-      const html = createInfoPanel(cameraPoints[selectedIdx]);
+      const html = createInfoPanel(cameraPoints[selectedIdx], sessionId);
       const tempDiv = document.createElement("div");
       tempDiv.innerHTML = html;
       const panel = tempDiv.firstElementChild as HTMLDivElement;
       wrap.querySelector(".spatial-sidebar")!.appendChild(panel);
+
+      const tabs = panel.querySelectorAll(".spatial-info-tab");
+      const img = panel.querySelector(".spatial-info-image") as HTMLImageElement | null;
+      if (img) {
+        img.crossOrigin = "anonymous";
+        img.onerror = () => {
+          img.style.display = "none";
+        };
+        img.onload = () => {
+          img.style.display = "block";
+        };
+      }
+      if (tabs.length && img) {
+        tabs.forEach((tab) => {
+          tab.addEventListener("click", () => {
+            tabs.forEach((t) => t.classList.remove("active"));
+            tab.classList.add("active");
+            const type = (tab as HTMLElement).dataset.imgType;
+            img.style.display = "";
+            img.src = type === "depth" ? img.dataset.depthUrl! : img.dataset.colorUrl!;
+          });
+        });
+      }
     }
   }
 
@@ -755,6 +1172,60 @@ export async function initSpatialViewer(
     while (obj && !obj.userData.cameraPoint) obj = obj.parent;
     if (!obj) return null;
     return cameraPoints.indexOf(obj.userData.cameraPoint as CameraPoint);
+  }
+
+  function flyToPoint(idx: number): Promise<void> {
+    return new Promise((resolve) => {
+      const p = cameraPoints[idx].position;
+      const offset = cameraPoints[idx].forward.clone().negate().multiplyScalar(maxDim * 0.4);
+      const upOffset = new THREE.Vector3(0, maxDim * 0.15, 0);
+      const targetCamPos = p.clone().add(offset).add(upOffset);
+      const startPos = camera.position.clone();
+      const startTarget = controls.target.clone();
+      const duration = 600;
+      const startTime = performance.now();
+
+      function animateFly(now: number) {
+        const t = Math.min((now - startTime) / duration, 1);
+        const ease = 1 - Math.pow(1 - t, 3);
+        camera.position.lerpVectors(startPos, targetCamPos, ease);
+        controls.target.lerpVectors(startTarget, p, ease);
+        controls.update();
+        if (t < 1) requestAnimationFrame(animateFly);
+        else resolve();
+      }
+      requestAnimationFrame(animateFly);
+    });
+  }
+
+  function stopPlayback() {
+    isPlaying = false;
+    if (playTimer !== null) {
+      clearTimeout(playTimer);
+      playTimer = null;
+    }
+    playBtn.textContent = "â–¶";
+    playBtn.title = "Play through all frames";
+  }
+
+  async function startPlayback() {
+    isPlaying = true;
+    playBtn.textContent = "â¸";
+    playBtn.title = "Pause playback";
+
+    const startIdx = selectedIdx !== null ? selectedIdx : 0;
+
+    for (let i = startIdx; i < cameraPoints.length; i++) {
+      if (!isPlaying) break;
+      setSelected(i);
+      await flyToPoint(i);
+      if (!isPlaying) break;
+      await new Promise<void>((resolve) => {
+        playTimer = window.setTimeout(resolve, 300);
+      });
+    }
+
+    stopPlayback();
   }
 
   canvas.addEventListener("mousemove", (e) => {
@@ -780,8 +1251,17 @@ export async function initSpatialViewer(
   });
 
   canvas.addEventListener("click", (e) => {
+    if (isPlaying) stopPlayback();
     const idx = getIntersectedCameraIdx(e);
     setSelected(idx !== null ? (idx === selectedIdx ? null : idx) : null);
+  });
+
+  playBtn.addEventListener("click", () => {
+    if (isPlaying) {
+      stopPlayback();
+    } else {
+      startPlayback();
+    }
   });
 
   sidebarContent.addEventListener("click", (e) => {
@@ -790,30 +1270,15 @@ export async function initSpatialViewer(
     const idx = parseInt(btn.dataset.idx ?? "-1", 10);
     if (idx < 0 || idx >= cameraPoints.length) return;
 
+    if (isPlaying) stopPlayback();
+
     if (idx === selectedIdx) {
       setSelected(null);
       return;
     }
 
     setSelected(idx);
-    const p = cameraPoints[idx].position;
-    const offset = cameraPoints[idx].forward.clone().negate().multiplyScalar(maxDim * 0.4);
-    const upOffset = new THREE.Vector3(0, maxDim * 0.15, 0);
-    const targetCamPos = p.clone().add(offset).add(upOffset);
-    const startPos = camera.position.clone();
-    const startTarget = controls.target.clone();
-    const duration = 600;
-    const startTime = performance.now();
-
-    function animateFly(now: number) {
-      const t = Math.min((now - startTime) / duration, 1);
-      const ease = 1 - Math.pow(1 - t, 3);
-      camera.position.lerpVectors(startPos, targetCamPos, ease);
-      controls.target.lerpVectors(startTarget, p, ease);
-      controls.update();
-      if (t < 1) requestAnimationFrame(animateFly);
-    }
-    requestAnimationFrame(animateFly);
+    flyToPoint(idx);
   });
 
   const resizeObserver = new ResizeObserver(() => {
@@ -836,6 +1301,8 @@ export async function initSpatialViewer(
 
   return () => {
     disposed = true;
+    stopPlayback();
+    clearHands();
     resizeObserver.disconnect();
     controls.dispose();
     renderer.dispose();
