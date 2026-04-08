@@ -1,7 +1,7 @@
 import {
   getSessions,
   uploadSession,
-  extractSessionIdFromFilenames,
+  extractSessionIdFromFiles,
   deleteSession,
 } from "../../lib/api";
 import type { FileUploadState } from "../../lib/api";
@@ -229,20 +229,39 @@ export function initList() {
     loadSessions();
   });
 
-  uploadFilesInput.addEventListener("change", () => {
+  uploadFilesInput.addEventListener("change", async () => {
     const files = Array.from(uploadFilesInput.files ?? []);
     if (!files.length || isUploading) return;
+
+    const uploadStatus = $("upload-status");
 
     const hasJson = files.some((f) => f.name.toLowerCase().endsWith(".json"));
     if (hasJson) {
       uploadSessionIdRow.classList.add("hidden");
       startUpload(files);
     } else {
-      setPendingUploadFiles(files);
-      const extracted = extractSessionIdFromFilenames(files);
-      uploadSessionIdInput.value = extracted ?? "";
-      uploadSessionIdRow.classList.remove("hidden");
-      uploadSessionIdInput.focus();
+      // Show extraction status
+      uploadStatus.textContent = "Reading session ID from file headers…";
+      uploadStatus.className = "upload-status";
+      uploadStatus.classList.remove("hidden");
+
+      // Read session ID from .bin/.wav file headers or filenames
+      const extracted = await extractSessionIdFromFiles(files);
+      if (extracted) {
+        // Session ID found – start upload automatically
+        uploadStatus.textContent = `Session ID found: ${extracted}`;
+        uploadStatus.className = "upload-status success";
+        uploadSessionIdRow.classList.add("hidden");
+        startUpload(files, extracted);
+      } else {
+        // No session ID found – ask user to enter one
+        uploadStatus.textContent = "Could not read session ID from file. Please enter it manually.";
+        uploadStatus.className = "upload-status error";
+        setPendingUploadFiles(files);
+        uploadSessionIdInput.value = "";
+        uploadSessionIdRow.classList.remove("hidden");
+        uploadSessionIdInput.focus();
+      }
     }
   });
 

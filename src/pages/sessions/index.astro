@@ -40,13 +40,13 @@ const base = import.meta.env.BASE_URL;
       </div>
 
       <div class="upload-card">
-        <p class="upload-hint">Select session files to upload. Upload starts automatically.</p>
+        <p class="upload-hint">Select session files to upload (.json, .bin, .wav, etc.). Upload starts automatically.</p>
         <div class="upload-row">
-          <input type="file" id="upload-files" multiple class="upload-input" />
+          <input type="file" id="upload-files" multiple class="upload-input" accept=".json,.bin,.wav" />
         </div>
         <div id="upload-session-id-row" class="upload-session-id-row hidden">
           <label for="upload-session-id" class="upload-session-id-label">
-            No JSON file found – enter or confirm the Session ID:
+            No Session ID found in filenames – please enter the Session ID:
           </label>
           <div class="upload-session-id-input-row">
             <input type="text" id="upload-session-id" placeholder="e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890" class="upload-session-id-input" />

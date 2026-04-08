@@ -102,6 +102,182 @@ export function extractSessionIdFromFilenames(files: File[]): string | null {
   return null;
 }
 
+function readFileHead(file: File, bytes: number): Promise<ArrayBuffer> {
+  return file.slice(0, bytes).arrayBuffer();
+}
+
+async function extractSessionIdFromBin(file: File): Promise<string | null> {
+  try {
+    const head = await readFileHead(file, 4 + 256);
+    const view = new DataView(head);
+    const len = view.getInt32(0, true);
+    if (len <= 0 || len > 250 || len + 4 > head.byteLength) return null;
+    const decoder = new TextDecoder("utf-8");
+    const sessionId = decoder.decode(new Uint8Array(head, 4, len));
+    if (/^[\x20-\x7e]+$/.test(sessionId) && sessionId.length >= 8) return sessionId;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function extractSessionIdFromWav(file: File): Promise<string | null> {
+  try {
+    const headSize = Math.min(file.size, 4096);
+    const head = await readFileHead(file, headSize);
+    if (head.byteLength < 44) return null;
+    const view = new DataView(head);
+    const td = new TextDecoder("ascii");
+
+    if (td.decode(new Uint8Array(head, 0, 4)) !== "RIFF") return null;
+    if (td.decode(new Uint8Array(head, 8, 4)) !== "WAVE") return null;
+
+    let offset = 12;
+    while (offset + 8 <= head.byteLength) {
+      const chunkId = td.decode(new Uint8Array(head, offset, 4));
+      const chunkSize = view.getUint32(offset + 4, true);
+
+      if (chunkSize > file.size) break;
+
+      if (chunkId === "seid") {
+        const available = head.byteLength - (offset + 8);
+        const idLen = Math.min(chunkSize, available);
+        if (idLen <= 0) return null;
+        const utf8 = new TextDecoder("utf-8");
+        let sessionId = utf8.decode(new Uint8Array(head, offset + 8, idLen));
+        sessionId = sessionId.replace(/\0+$/, "");
+        if (sessionId.length > 0) return sessionId;
+        return null;
+      }
+
+      const advance = 8 + chunkSize + (chunkSize % 2);
+      if (advance === 0) break;
+      offset += advance;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function extractSessionIdFromFiles(files: File[]): Promise<string | null> {
+  for (const f of files) {
+    if (f.name.toLowerCase().endsWith(".bin")) {
+      const id = await extractSessionIdFromBin(f);
+      if (id) return id;
+    }
+  }
+
+  for (const f of files) {
+    if (f.name.toLowerCase().endsWith(".wav")) {
+      const id = await extractSessionIdFromWav(f);
+      if (id) return id;
+    }
+  }
+
+  return extractSessionIdFromFilenames(files);
+}
+
+const CHUNK_SIZE = 50 * 1024 * 1024;
+const CHUNK_THRESHOLD = 100 * 1024 * 1024;
+
+function uploadFileXHR(
+  file: File,
+  sessionId: string | undefined,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("files", file);
+    if (sessionId) form.append("session_id", sessionId);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_URL}/sessions/upload`);
+    xhr.setRequestHeader("X-API-Key", API_KEY);
+
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        let detail = `${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          detail = body.detail || body.error || body.message || detail;
+        } catch {
+          if (xhr.responseText) detail = xhr.responseText.substring(0, 200);
+        }
+        reject(new Error(detail));
+      }
+    });
+
+    xhr.addEventListener("error", () => reject(new Error("Network error")));
+    xhr.addEventListener("timeout", () => reject(new Error("Upload timed out")));
+    xhr.timeout = 0; // no timeout for large files
+    xhr.send(form);
+  });
+}
+
+async function uploadFileChunked(
+  file: File,
+  sessionId: string | undefined,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<void> {
+  const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+  let uploadedBytes = 0;
+
+  for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+    const start = chunkIdx * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    const chunk = file.slice(start, end);
+
+    const form = new FormData();
+    form.append("files", chunk, file.name);
+    if (sessionId) form.append("session_id", sessionId);
+    form.append("chunk_index", String(chunkIdx));
+    form.append("total_chunks", String(totalChunks));
+    form.append("original_filename", file.name);
+
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${API_URL}/sessions/upload`);
+      xhr.setRequestHeader("X-API-Key", API_KEY);
+
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) {
+          onProgress(uploadedBytes + e.loaded, file.size);
+        }
+      });
+
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          uploadedBytes += (end - start);
+          onProgress(uploadedBytes, file.size);
+          resolve();
+        } else {
+          let detail = `${xhr.status}`;
+          try {
+            const body = JSON.parse(xhr.responseText);
+            detail = body.detail || body.error || body.message || detail;
+          } catch {
+            if (xhr.responseText) detail = xhr.responseText.substring(0, 200);
+          }
+          reject(new Error(detail));
+        }
+      });
+
+      xhr.addEventListener("error", () => reject(new Error("Network error")));
+      xhr.addEventListener("timeout", () => reject(new Error("Upload timed out")));
+      xhr.timeout = 0;
+      xhr.send(form);
+    });
+  }
+}
+
 export async function uploadSession(
   files: File[],
   onProgress?: FileProgressCallback,
@@ -111,82 +287,37 @@ export async function uploadSession(
     name: f.name,
     size: f.size,
     percent: 0,
-    status: "uploading" as const,
+    status: "pending" as const,
   }));
   onProgress?.(states);
 
-  const form = new FormData();
-  for (const f of files) {
-    form.append("files", f);
-  }
-  if (sessionId) {
-    form.append("session_id", sessionId);
-  }
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const state = states[i];
+    state.status = "uploading";
+    onProgress?.([...states]);
 
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_URL}/sessions/upload`);
-    xhr.setRequestHeader("X-API-Key", API_KEY);
-
-    xhr.upload.addEventListener("progress", (e) => {
-      if (!e.lengthComputable || !onProgress) return;
-      let bytesAccounted = 0;
-      for (const s of states) {
-        const fileEnd = bytesAccounted + s.size;
-        if (e.loaded >= fileEnd) {
-          s.percent = 100;
-          s.status = "done";
-        } else if (e.loaded > bytesAccounted) {
-          const fileSent = e.loaded - bytesAccounted;
-          s.percent = Math.round((fileSent / s.size) * 100);
-          s.status = "uploading";
-        } else {
-          s.percent = 0;
-          s.status = "pending";
-        }
-        bytesAccounted = fileEnd;
-      }
-      onProgress([...states]);
-    });
-
-    xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        for (const s of states) {
-          s.status = "done";
-          s.percent = 100;
-        }
-        onProgress?.([...states]);
-        resolve();
-      } else {
-        let detail = `${xhr.status}`;
-        try {
-          const body = JSON.parse(xhr.responseText);
-          if (body.detail) detail = body.detail;
-          else if (body.error) detail = body.error;
-          else if (body.message) detail = body.message;
-        } catch {
-          if (xhr.responseText) detail = xhr.responseText.substring(0, 200);
-        }
-        for (const s of states) {
-          s.status = "error";
-          s.error = detail;
-        }
-        onProgress?.([...states]);
-        reject(new Error(detail));
-      }
-    });
-
-    xhr.addEventListener("error", () => {
-      for (const s of states) {
-        s.status = "error";
-        s.error = "Network error";
-      }
+    const progressCb = (loaded: number, total: number) => {
+      state.percent = Math.round((loaded / total) * 100);
       onProgress?.([...states]);
-      reject(new Error("Network error"));
-    });
+    };
 
-    xhr.send(form);
-  });
+    try {
+      if (file.size > CHUNK_THRESHOLD) {
+        await uploadFileChunked(file, sessionId, progressCb);
+      } else {
+        await uploadFileXHR(file, sessionId, progressCb);
+      }
+      state.status = "done";
+      state.percent = 100;
+      onProgress?.([...states]);
+    } catch (err) {
+      state.status = "error";
+      state.error = (err as Error).message;
+      onProgress?.([...states]);
+      throw err;
+    }
+  }
 }
 
 export async function deleteSession(id: string): Promise<void> {

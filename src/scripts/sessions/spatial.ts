@@ -5,6 +5,8 @@ import {
   getFrameMetadata,
   getColorImageUrl,
   getDepthImageUrl,
+  downloadFile,
+  getSession,
 } from "../../lib/api";
 import type { FrameSummary } from "../../lib/api";
 
@@ -16,6 +18,16 @@ interface CameraPoint {
   up: THREE.Vector3;
   mesh: THREE.Group;
 }
+
+interface MarkerData {
+  name: string;
+  position: THREE.Vector3;
+  rotation: THREE.Quaternion;
+  rawPosition: number[];
+  rawRotation: number[];
+}
+
+const MARKER_COLOR = 0xffffff;
 
 const CAMERA_COLOR = 0x6d5dfc;
 const CAMERA_COLOR_HOVER = 0x9b8aff;
@@ -391,14 +403,14 @@ function updateTooltip(
   const lines: string[] = [];
   lines.push(`<strong>Frame ${f.frame_index}</strong>`);
   lines.push(`Time: ${(f.timestampMs / 1000).toFixed(2)}s`);
-  if (f.distanceAtCenter > 0) lines.push(`<span style="color:#22c55e">â¦¿</span> Depth: ${f.distanceAtCenter.toFixed(3)}m`);
+  if (f.distanceAtCenter > 0) lines.push(`<span style="color:#22c55e">⦿</span> Depth: ${f.distanceAtCenter.toFixed(3)}m`);
   const flags: string[] = [];
   if (f.hasColor) flags.push("Color");
   if (f.hasDepth) flags.push("Depth");
   if (f.hasTracking) flags.push("Tracking");
   if (f.leftHandTracked) flags.push("L-Hand");
   if (f.rightHandTracked) flags.push("R-Hand");
-  if (flags.length) lines.push(flags.join(" Â· "));
+  if (flags.length) lines.push(flags.join(" · "));
   tip.innerHTML = lines.join("<br>");
   tip.classList.remove("hidden");
   tip.style.left = `${x + 14}px`;
@@ -422,7 +434,7 @@ function createInfoPanel(point: CameraPoint, sessionId: string): string {
   html += `<div class="spatial-info-row"><span>Time</span><span>${(f.timestampMs / 1000).toFixed(2)}s</span></div>`;
   html += `<div class="spatial-info-row"><span>Position</span><span>${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}</span></div>`;
   if (f.distanceAtCenter > 0) {
-    html += `<div class="spatial-info-row spatial-info-depth"><span>â¦¿ Depth at Center</span><span>${f.distanceAtCenter.toFixed(2)}m</span></div>`;
+    html += `<div class="spatial-info-row spatial-info-depth"><span>⦿ Depth at Center</span><span>${f.distanceAtCenter.toFixed(2)}m</span></div>`;
   }
 
   if (hasImage) {
@@ -454,88 +466,62 @@ function createPathLine(points: CameraPoint[]): THREE.Line {
   return new THREE.Line(geo, mat);
 }
 
-const HAND_JOINT_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4],
-  [0, 5], [5, 6], [6, 7], [7, 8],
-  [0, 9], [9, 10], [10, 11], [11, 12],
-  [0, 13], [13, 14], [14, 15], [15, 16],
-  [0, 17], [17, 18], [18, 19], [19, 20],
-  [5, 9], [9, 13], [13, 17],
+const OPENXR_BONE_NAMES: string[] = [
+  "XRHand_Palm",
+  "XRHand_Wrist",
+  "XRHand_ThumbMetacarpal",
+  "XRHand_ThumbProximal",
+  "XRHand_ThumbDistal",
+  "XRHand_ThumbTip",
+  "XRHand_IndexMetacarpal",
+  "XRHand_IndexProximal",
+  "XRHand_IndexIntermediate",
+  "XRHand_IndexDistal",
+  "XRHand_IndexTip",
+  "XRHand_MiddleMetacarpal",
+  "XRHand_MiddleProximal",
+  "XRHand_MiddleIntermediate",
+  "XRHand_MiddleDistal",
+  "XRHand_MiddleTip",
+  "XRHand_RingMetacarpal",
+  "XRHand_RingProximal",
+  "XRHand_RingIntermediate",
+  "XRHand_RingDistal",
+  "XRHand_RingTip",
+  "XRHand_LittleMetacarpal",
+  "XRHand_LittleProximal",
+  "XRHand_LittleIntermediate",
+  "XRHand_LittleDistal",
+  "XRHand_LittleTip",
 ];
 
-const OVR_BONE_PARENTS: number[] = [
-  -1, 0, 0, 2, 3, 4, 0, 6, 7, 0, 9, 10, 0, 12, 13, 0, 15, 16, 17, 5, 8, 11, 14, 18,
-];
-const OVR_BONE_LENGTHS: number[] = [
-  0.0, 0.0, 0.025, 0.038, 0.028, 0.023,
-  0.075, 0.038, 0.024,
-  0.07, 0.043, 0.026,
-  0.065, 0.04, 0.025,
-  0.025, 0.05, 0.028, 0.02,
-  0.02, 0.02, 0.02, 0.02, 0.02,
-];
-const OVR_TO_OPENXR: number[] = [
-  0, 2, 3, 4, 19, 6, 7, 8, 20, 9, 10, 11, 21, 12, 13, 14, 22, 16, 17, 18, 23,
+const OPENXR_BONE_PARENT_INDICES: number[] = [
+  1, -1, 1, 2, 3, 4, 1, 6, 7, 8, 9, 1, 11, 12, 13, 14, 1, 16, 17, 18, 19, 1, 21, 22, 23, 24,
 ];
 
-function computeOvrJointPositions(
-  rootPos: THREE.Vector3,
-  boneRotations: number[],
-  handScale: number,
-): THREE.Vector3[] {
-  const numBones = 24;
-  const worldPositions: THREE.Vector3[] = new Array(numBones);
-  const worldRotations: THREE.Quaternion[] = new Array(numBones);
+const HAND_JOINT_CONNECTIONS: [number, number][] = OPENXR_BONE_PARENT_INDICES
+  .map((parent, i) => (parent >= 0 ? [i, parent] as [number, number] : null))
+  .filter((c): c is [number, number] => c !== null);
 
-  const ovrRootPos = new THREE.Vector3(rootPos.x, rootPos.y, -rootPos.z);
-
-  const ovrBoneQuats: THREE.Quaternion[] = [];
-  for (let i = 0; i < numBones; i++) {
-    const off = i * 4;
-    if (off + 3 < boneRotations.length) {
-      ovrBoneQuats.push(new THREE.Quaternion(
-        boneRotations[off],
-        -boneRotations[off + 1],
-        -boneRotations[off + 2],
-        boneRotations[off + 3],
-      ));
-    } else {
-      ovrBoneQuats.push(new THREE.Quaternion());
-    }
-  }
-
-  const boneDir = new THREE.Vector3(1, 0, 0);
-
-  for (let i = 0; i < numBones; i++) {
-    const parentIdx = OVR_BONE_PARENTS[i];
-    if (parentIdx < 0) {
-      worldPositions[i] = ovrRootPos.clone();
-      worldRotations[i] = ovrBoneQuats[i].clone();
-    } else {
-      worldRotations[i] = ovrBoneQuats[i].clone();
-      const len = OVR_BONE_LENGTHS[i] * handScale;
-      const offset = boneDir.clone().multiplyScalar(len).applyQuaternion(worldRotations[parentIdx]);
-      worldPositions[i] = worldPositions[parentIdx].clone().add(offset);
-    }
-  }
-  return worldPositions.map(p => new THREE.Vector3(p.x, p.y, -p.z));
-}
-
-function tryParseOvrHand(handData: Record<string, unknown>): THREE.Vector3[] | null {
+function tryParseOpenXRWorldHand(handData: Record<string, unknown>): THREE.Vector3[] | null {
   if (!handData || typeof handData !== "object") return null;
   if (handData.isTracked === false) return null;
-  const rootPosRaw = tryVec3(handData.rootPosition);
-  const rootRotRaw = tryQuat(handData.rootRotation);
-  const boneRots = handData.boneRotations;
-  if (!rootPosRaw || !rootRotRaw || !Array.isArray(boneRots)) return null;
-  if (boneRots.length < 96) return null;
-  const handScale = typeof handData.handScale === "number" ? handData.handScale : 1.0;
-  const allPositions = computeOvrJointPositions(rootPosRaw, boneRots as number[], handScale);
+
+  const bonePositions = handData.boneWorldPositions;
+  if (!Array.isArray(bonePositions) || bonePositions.length < 3) return null;
+
+  const boneCount = Math.floor(bonePositions.length / 3);
   const joints: THREE.Vector3[] = [];
-  for (const ovrIdx of OVR_TO_OPENXR) {
-    joints.push(allPositions[ovrIdx]);
+
+  for (let i = 0; i < boneCount; i++) {
+    const x = num(bonePositions[i * 3]);
+    const y = num(bonePositions[i * 3 + 1]);
+    const z = num(bonePositions[i * 3 + 2]);
+    if (x === null || y === null || z === null) return null;
+    joints.push(unityToThreePos(new THREE.Vector3(x, y, z)));
   }
-  return joints;
+
+  return joints.length >= 5 ? joints : null;
 }
 
 function parseHandJoints(trackingData: Record<string, unknown>, hand: "left" | "right"): THREE.Vector3[] | null {
@@ -544,13 +530,13 @@ function parseHandJoints(trackingData: Record<string, unknown>, hand: "left" | "
   const lcHand = hand;
   const ucHand = hand === "left" ? "Left" : "Right";
 
-  const ovrKeys = [lcHand + "Hand", ucHand + "Hand", lcHand + "_hand", lcHand, ucHand];
-  for (const key of ovrKeys) {
+  const openXRKeys = [lcHand + "Hand", ucHand + "Hand", lcHand + "_hand", lcHand, ucHand];
+  for (const key of openXRKeys) {
     const val = trackingData[key];
     if (val && typeof val === "object" && !Array.isArray(val)) {
       const handData = val as Record<string, unknown>;
-      if (handData.boneRotations && Array.isArray(handData.boneRotations)) {
-        const joints = tryParseOvrHand(handData);
+      if (Array.isArray(handData.boneWorldPositions)) {
+        const joints = tryParseOpenXRWorldHand(handData);
         if (joints) return joints;
       }
     }
@@ -672,12 +658,11 @@ function parseHandJoints(trackingData: Record<string, unknown>, hand: "left" | "
 }
 
 const HAND_SKIN_TRIANGLES = [
-  [0, 5, 9], [0, 9, 13], [0, 13, 17],
-  [5, 9, 10], [5, 6, 10], [9, 13, 14], [9, 10, 14], [13, 17, 18], [13, 14, 18],
-  [0, 1, 5], [1, 2, 5],
-  [5, 6, 9], [6, 9, 10],
-  [9, 10, 13], [10, 13, 14],
-  [13, 14, 17], [14, 17, 18],
+  [0, 2, 6], [0, 6, 11], [0, 11, 16], [0, 16, 21],
+  [6, 11, 12], [6, 7, 12],
+  [11, 16, 17], [11, 12, 17],
+  [16, 21, 22], [16, 17, 22],
+  [1, 0, 2], [1, 0, 21],
 ];
 
 function createFingerTube(
@@ -740,11 +725,11 @@ function createHandMesh(joints: THREE.Vector3[], color: number, meshScale: numbe
     opacity: 0.85,
   });
   const fingerChains = [
-    [0, 1, 2, 3, 4],
-    [0, 5, 6, 7, 8],
-    [0, 9, 10, 11, 12],
-    [0, 13, 14, 15, 16],
-    [0, 17, 18, 19, 20],
+    [1, 2, 3, 4, 5],
+    [1, 6, 7, 8, 9, 10],
+    [1, 11, 12, 13, 14, 15],
+    [1, 16, 17, 18, 19, 20],
+    [1, 21, 22, 23, 24, 25],
   ];
   const tubeRadius = meshScale * 0.025;
   for (const chain of fingerChains) {
@@ -780,7 +765,7 @@ function createHandMesh(joints: THREE.Vector3[], color: number, meshScale: numbe
     }
   }
 
-  const tipIndices = [4, 8, 12, 16, 20];
+  const tipIndices = [5, 10, 15, 20, 25];
   const tipGeo = new THREE.SphereGeometry(meshScale * 0.05, 8, 8);
   const tipMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -799,6 +784,91 @@ function createHandMesh(joints: THREE.Vector3[], color: number, meshScale: numbe
 
   group.name = `hand-${color === HAND_LEFT_COLOR ? "left" : "right"}`;
   return group;
+}
+
+async function loadMarkers(sessionId: string): Promise<MarkerData[]> {
+  try {
+    const session = await getSession(sessionId);
+    if (!session.files || !session.files.length) return [];
+    const markerFile = session.files.find(
+      (f) => f.filename.toLowerCase().includes("marker") && f.filename.toLowerCase().endsWith(".json"),
+    );
+    if (!markerFile) return [];
+    const blob = await downloadFile(sessionId, markerFile.filename);
+    const text = await blob.text();
+    const json = JSON.parse(text);
+    const rawMarkers: unknown[] = Array.isArray(json)
+      ? json
+      : Array.isArray(json.markers)
+        ? json.markers
+        : Array.isArray(json.Markers)
+          ? json.Markers
+          : [];
+    const result: MarkerData[] = [];
+    for (const entry of rawMarkers) {
+      if (!entry || typeof entry !== "object") continue;
+      const m = entry as Record<string, unknown>;
+      const name = typeof m.name === "string" ? m.name : typeof m.Name === "string" ? m.Name : typeof m.id === "string" ? m.id : "Marker";
+      const posRaw = tryVec3(m.position) ?? tryVec3(m.Position) ?? tryVec3(m.pos);
+      if (!posRaw) continue;
+      const rotRaw = tryQuat(m.rotation) ?? tryQuat(m.Rotation) ?? tryQuat(m.rot) ?? tryQuat(m.orientation);
+      const position = unityToThreePos(posRaw);
+      const rotation = rotRaw ? unityToThreeQuat(rotRaw) : new THREE.Quaternion();
+      result.push({
+        name,
+        position,
+        rotation,
+        rawPosition: [posRaw.x, posRaw.y, posRaw.z],
+        rawRotation: rotRaw ? [rotRaw.x, rotRaw.y, rotRaw.z, rotRaw.w] : [0, 0, 0, 1],
+      });
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+function createMarkerMeshes(markers: MarkerData[], meshScale: number): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "markers";
+  const geo = new THREE.BoxGeometry(meshScale * 0.2, meshScale * 0.2, meshScale * 0.2);
+  const mat = new THREE.MeshStandardMaterial({
+    color: MARKER_COLOR,
+    metalness: 0.3,
+    roughness: 0.4,
+    transparent: true,
+    opacity: 0.9,
+  });
+  for (const marker of markers) {
+    const cube = new THREE.Mesh(geo, mat.clone());
+    cube.position.copy(marker.position);
+    cube.quaternion.copy(marker.rotation);
+    cube.userData.marker = marker;
+    group.add(cube);
+  }
+  return group;
+}
+
+function updateMarkerTooltip(
+  tip: HTMLDivElement,
+  marker: MarkerData | null,
+  x: number,
+  y: number,
+) {
+  if (!marker) {
+    tip.classList.add("hidden");
+    return;
+  }
+  const p = marker.rawPosition;
+  const r = marker.rawRotation;
+  const lines: string[] = [];
+  lines.push(`<strong>${marker.name}</strong>`);
+  lines.push(`Pos: ${p[0].toFixed(3)}, ${p[1].toFixed(3)}, ${p[2].toFixed(3)}`);
+  lines.push(`Rot: ${r[0].toFixed(3)}, ${r[1].toFixed(3)}, ${r[2].toFixed(3)}, ${r[3].toFixed(3)}`);
+  tip.innerHTML = lines.join("<br>");
+  tip.classList.remove("hidden");
+  tip.style.left = `${x + 14}px`;
+  tip.style.top = `${y + 14}px`;
 }
 
 function applyVisualState(
@@ -863,7 +933,7 @@ export async function initSpatialViewer(
   container.innerHTML = `<div class="spatial-viewer-wrap">
     <div class="spatial-canvas-wrap">
       <canvas class="spatial-canvas"></canvas>
-      <div class="spatial-loading"><span class="spinner"></span> Loading spatial dataâ€¦</div>
+      <div class="spatial-loading"><span class="spinner"></span> Loading spatial data…</div>
     </div>
     <div class="spatial-sidebar">
       <div class="spatial-sidebar-header">
@@ -996,6 +1066,13 @@ export async function initSpatialViewer(
     scene.add(createPathLine(cameraPoints));
   }
 
+  let markerGroup = new THREE.Group();
+  loadMarkers(sessionId).then((markers) => {
+    if (markers.length > 0) {
+      markerGroup = createMarkerMeshes(markers, scale);
+      scene.add(markerGroup);
+    }
+  });
 
   let activeDepthRay: THREE.Group | null = null;
   let activeHandGroups: THREE.Group[] = [];
@@ -1204,13 +1281,13 @@ export async function initSpatialViewer(
       clearTimeout(playTimer);
       playTimer = null;
     }
-    playBtn.textContent = "â–¶";
+    playBtn.textContent = "▶";
     playBtn.title = "Play through all frames";
   }
 
   async function startPlayback() {
     isPlaying = true;
-    playBtn.textContent = "â¸";
+    playBtn.textContent = "⏸";
     playBtn.title = "Pause playback";
 
     const startIdx = selectedIdx !== null ? selectedIdx : 0;
@@ -1229,6 +1306,33 @@ export async function initSpatialViewer(
   }
 
   canvas.addEventListener("mousemove", (e) => {
+    const r = canvas.getBoundingClientRect();
+    const mx = ((e.clientX - r.left) / r.width) * 2 - 1;
+    const my = -((e.clientY - r.top) / r.height) * 2 + 1;
+    raycaster.setFromCamera(new THREE.Vector2(mx, my), camera);
+
+    const tipX = e.clientX - canvasWrap.getBoundingClientRect().left;
+    const tipY = e.clientY - canvasWrap.getBoundingClientRect().top;
+
+    const markerMeshes: THREE.Mesh[] = [];
+    markerGroup.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) markerMeshes.push(obj as THREE.Mesh);
+    });
+    const markerHits = raycaster.intersectObjects(markerMeshes, false);
+    if (markerHits.length > 0) {
+      let mObj: THREE.Object3D | null = markerHits[0].object;
+      while (mObj && !mObj.userData.marker) mObj = mObj.parent;
+      if (mObj && mObj.userData.marker) {
+        if (hoveredIdx !== null) {
+          hoveredIdx = null;
+          updateVisuals();
+        }
+        canvas.style.cursor = "pointer";
+        updateMarkerTooltip(tooltip, mObj.userData.marker as MarkerData, tipX, tipY);
+        return;
+      }
+    }
+
     const idx = getIntersectedCameraIdx(e);
     if (idx !== hoveredIdx) {
       hoveredIdx = idx;
@@ -1238,8 +1342,8 @@ export async function initSpatialViewer(
     updateTooltip(
       tooltip,
       idx !== null ? cameraPoints[idx] : null,
-      e.clientX - canvasWrap.getBoundingClientRect().left,
-      e.clientY - canvasWrap.getBoundingClientRect().top,
+      tipX,
+      tipY,
     );
   });
 
@@ -1303,6 +1407,10 @@ export async function initSpatialViewer(
     disposed = true;
     stopPlayback();
     clearHands();
+    if (markerGroup.children.length > 0) {
+      scene.remove(markerGroup);
+      disposeGroup(markerGroup);
+    }
     resizeObserver.disconnect();
     controls.dispose();
     renderer.dispose();
