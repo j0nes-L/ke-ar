@@ -7,8 +7,15 @@ import {
   getDepthImageUrl,
   downloadFile,
   getSession,
+  listImages,
+  API_KEY,
 } from "../../lib/api";
 import type { FrameSummary } from "../../lib/api";
+import {
+  colorFilenameMap,
+  depthFilenameMap,
+  populateFilenameMaps,
+} from "./state";
 
 interface CameraPoint {
   frame: FrameSummary;
@@ -27,8 +34,8 @@ interface MarkerData {
   rawRotation: number[];
 }
 
+const PREFETCH_RADIUS = 10;
 const MARKER_COLOR = 0xffffff;
-
 const CAMERA_COLOR = 0x6d5dfc;
 const CAMERA_COLOR_HOVER = 0x9b8aff;
 const CAMERA_COLOR_SELECTED = 0xffffff;
@@ -417,17 +424,21 @@ function updateTooltip(
   tip.style.top = `${y + 14}px`;
 }
 
-function getFrameFilename(frameIndex: number): string {
+function getFrameFilename(type: "color" | "depth", frameIndex: number): string {
+  const map = type === "color" ? colorFilenameMap : depthFilenameMap;
+  const cached = map.get(frameIndex);
+  if (cached) return cached;
   return `frame_${String(frameIndex).padStart(4, "0")}.png`;
 }
 
 function createInfoPanel(point: CameraPoint, sessionId: string): string {
   const f = point.frame;
   const p = point.position;
-  const filename = getFrameFilename(f.frame_index);
-  const colorUrl = getColorImageUrl(sessionId, filename);
-  const depthUrl = getDepthImageUrl(sessionId, filename);
-  const hasImage = f.hasColor || f.hasDepth;
+  const colorFilename = getFrameFilename("color", f.frame_index);
+  const depthFilename = getFrameFilename("depth", f.frame_index);
+  const colorUrl = getColorImageUrl(sessionId, colorFilename);
+  const depthUrl = getDepthImageUrl(sessionId, depthFilename);
+  const hasAnyImage = f.hasColor || f.hasDepth;
 
   let html = `<div class="spatial-info-panel">`;
   html += `<div class="spatial-info-title">Frame ${f.frame_index}</div>`;
@@ -437,14 +448,18 @@ function createInfoPanel(point: CameraPoint, sessionId: string): string {
     html += `<div class="spatial-info-row spatial-info-depth"><span>⦿ Depth at Center</span><span>${f.distanceAtCenter.toFixed(2)}m</span></div>`;
   }
 
-  if (hasImage) {
+  if (hasAnyImage) {
+    const initialTab = f.hasColor ? "color" : "depth";
     html += `<div class="spatial-info-image-wrap">`;
     html += `<div class="spatial-info-image-tabs">`;
-    if (f.hasColor) html += `<button class="spatial-info-tab active" data-img-type="color">Color</button>`;
-    if (f.hasDepth) html += `<button class="spatial-info-tab${!f.hasColor ? " active" : ""}" data-img-type="depth">Depth</button>`;
+    html += `<button class="spatial-info-tab${initialTab === "color" ? " active" : ""}" data-img-type="color">Color</button>`;
+    html += `<button class="spatial-info-tab${initialTab === "depth" ? " active" : ""}" data-img-type="depth">Depth</button>`;
     html += `</div>`;
-    const initialUrl = f.hasColor ? colorUrl : depthUrl;
-    html += `<img class="spatial-info-image" src="${initialUrl}" alt="Frame ${f.frame_index}" data-color-url="${colorUrl}" data-depth-url="${depthUrl}" />`;
+    html += `<div class="spatial-info-image-container" data-has-color="${f.hasColor}" data-has-depth="${f.hasDepth}">`;
+    html += `<div class="spatial-info-image-loading"><svg viewBox="0 0 24 24" width="24" height="24"><circle cx="12" cy="12" r="10" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2.5"/><circle cx="12" cy="12" r="10" fill="none" stroke="rgba(109,93,252,0.7)" stroke-width="2.5" stroke-dasharray="31.4 31.4" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.7s" repeatCount="indefinite"/></circle></svg></div>`;
+    html += `<p class="spatial-info-image-empty" style="display:none">No image available</p>`;
+    html += `<img class="spatial-info-image" alt="Frame ${f.frame_index}" data-color-url="${colorUrl}" data-depth-url="${depthUrl}" />`;
+    html += `</div>`;
     html += `</div>`;
   }
   html += `</div>`;
@@ -956,13 +971,13 @@ export async function initSpatialViewer(
   container.innerHTML = `<div class="spatial-viewer-wrap">
     <div class="spatial-canvas-wrap">
       <canvas class="spatial-canvas"></canvas>
-      <div class="spatial-loading"><span class="spinner"></span> Loading spatial data…</div>
+      <div class="spatial-loading"><span class="spinner"></span> Loading spatial data\u2026</div>
     </div>
     <div class="spatial-sidebar">
       <div class="spatial-sidebar-header">
         <span class="spatial-sidebar-title">Frames</span>
         <div class="spatial-sidebar-actions">
-          <button class="spatial-play-btn" title="Play through all frames">▶</button>
+          <button class="spatial-play-btn" title="Play through all frames">\u25B6</button>
           <span class="spatial-sidebar-count"></span>
         </div>
       </div>
@@ -995,6 +1010,21 @@ export async function initSpatialViewer(
     return;
   }
 
+  let imageListOk = false;
+  try {
+    const imageList = await listImages(sessionId, 9999, 0);
+    populateFilenameMaps(imageList.color_images ?? [], imageList.depth_images ?? []);
+    imageListOk = true;
+  } catch {
+  }
+
+  if (imageListOk) {
+    for (const f of allFrames) {
+      f.hasColor = colorFilenameMap.has(f.frame_index);
+      f.hasDepth = depthFilenameMap.has(f.frame_index);
+    }
+  }
+
   if (allFrames.length === 0) {
     loadingEl.innerHTML = `<span style="color:var(--color-text-muted)">No frames found for this session.</span>`;
     return;
@@ -1025,7 +1055,6 @@ export async function initSpatialViewer(
     loadingEl.innerHTML = `<span style="color:var(--color-text-muted)">No valid pose data in ${allFrames.length} frames.<br><small style="opacity:0.6">${hint}</small></span>`;
     return;
   }
-
 
   const bbox = new THREE.Box3();
   for (const p of cameraPoints) bbox.expandByPoint(p.position);
@@ -1102,6 +1131,8 @@ export async function initSpatialViewer(
   let isPlaying = false;
   let playTimer: number | null = null;
   const handDataCache = new Map<number, { left: THREE.Vector3[] | null; right: THREE.Vector3[] | null }>();
+  const imageBlobCache = new Map<string, string>();
+  let prefetchAbort: AbortController | null = null;
 
   loadingEl.classList.add("hidden");
 
@@ -1152,6 +1183,125 @@ export async function initSpatialViewer(
     activeHandGroups = [];
   }
 
+  async function fetchHandData(frameIndex: number): Promise<{ left: THREE.Vector3[] | null; right: THREE.Vector3[] | null }> {
+    const cached = handDataCache.get(frameIndex);
+    if (cached) return cached;
+    try {
+      const meta = await getFrameMetadata(sessionId, frameIndex);
+      const result = {
+        left: meta.tracking ? parseHandJoints(meta.tracking, "left") : null,
+        right: meta.tracking ? parseHandJoints(meta.tracking, "right") : null,
+      };
+      handDataCache.set(frameIndex, result);
+      return result;
+    } catch {
+      const empty = { left: null, right: null };
+      handDataCache.set(frameIndex, empty);
+      return empty;
+    }
+  }
+
+  function outwardIndices(centerIdx: number): number[] {
+    const indices: number[] = [centerIdx];
+    for (let d = 1; d <= PREFETCH_RADIUS; d++) {
+      if (centerIdx + d < cameraPoints.length) indices.push(centerIdx + d);
+      if (centerIdx - d >= 0) indices.push(centerIdx - d);
+    }
+    return indices;
+  }
+
+  function prefetchHandsNearby(centerPointIdx: number, signal: AbortSignal) {
+    const start = Math.max(0, centerPointIdx - PREFETCH_RADIUS);
+    const end = Math.min(cameraPoints.length - 1, centerPointIdx + PREFETCH_RADIUS);
+
+    const evictKeys = new Set<number>();
+    for (let i = start; i <= end; i++) {
+      evictKeys.add(cameraPoints[i].frame.frame_index);
+    }
+    for (const key of handDataCache.keys()) {
+      if (!evictKeys.has(key)) handDataCache.delete(key);
+    }
+
+    (async () => {
+      for (const i of outwardIndices(centerPointIdx)) {
+        if (signal.aborted) return;
+        const f = cameraPoints[i].frame;
+        if (!f.hasTracking && !f.leftHandTracked && !f.rightHandTracked) continue;
+        if (handDataCache.has(f.frame_index)) continue;
+        await fetchHandData(f.frame_index);
+      }
+    })();
+  }
+
+  async function fetchAuthImage(url: string, key: string, signal?: AbortSignal): Promise<string | null> {
+    if (imageBlobCache.has(key)) return imageBlobCache.get(key)!;
+    try {
+      const headers: Record<string, string> = {};
+      if (API_KEY) headers["X-API-Key"] = API_KEY;
+      const res = await fetch(url, { headers, signal, cache: "no-store" });
+      if (!res.ok) return null;
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      imageBlobCache.set(key, blobUrl);
+      return blobUrl;
+    } catch {
+      return null;
+    }
+  }
+
+  function evictImagesOutsideWindow(centerPointIdx: number) {
+    const start = Math.max(0, centerPointIdx - PREFETCH_RADIUS);
+    const end = Math.min(cameraPoints.length - 1, centerPointIdx + PREFETCH_RADIUS);
+    const keepSet = new Set<string>();
+    for (let i = start; i <= end; i++) {
+      const fi = cameraPoints[i].frame.frame_index;
+      keepSet.add(`color:${fi}`);
+      keepSet.add(`depth:${fi}`);
+    }
+    for (const [key, url] of imageBlobCache) {
+      if (!keepSet.has(key)) {
+        URL.revokeObjectURL(url);
+        imageBlobCache.delete(key);
+      }
+    }
+  }
+
+  function prefetchImagesNearby(centerPointIdx: number, signal: AbortSignal) {
+    evictImagesOutsideWindow(centerPointIdx);
+
+    (async () => {
+      for (const i of outwardIndices(centerPointIdx)) {
+        if (signal.aborted) return;
+        const f = cameraPoints[i].frame;
+        if (f.hasColor) {
+          const key = `color:${f.frame_index}`;
+          if (!imageBlobCache.has(key)) {
+            const filename = getFrameFilename("color", f.frame_index);
+            const url = getColorImageUrl(sessionId, filename);
+            await fetchAuthImage(url, key, signal);
+          }
+        }
+        if (signal.aborted) return;
+        if (f.hasDepth) {
+          const key = `depth:${f.frame_index}`;
+          if (!imageBlobCache.has(key)) {
+            const filename = getFrameFilename("depth", f.frame_index);
+            const url = getDepthImageUrl(sessionId, filename);
+            await fetchAuthImage(url, key, signal);
+          }
+        }
+      }
+    })();
+  }
+
+  function startPrefetch(centerPointIdx: number) {
+    if (prefetchAbort) prefetchAbort.abort();
+    const ac = new AbortController();
+    prefetchAbort = ac;
+    prefetchHandsNearby(centerPointIdx, ac.signal);
+    prefetchImagesNearby(centerPointIdx, ac.signal);
+  }
+
   async function updateHands() {
     clearHands();
     if (selectedIdx === null) return;
@@ -1160,33 +1310,18 @@ export async function initSpatialViewer(
 
     if (!f.hasTracking && !f.leftHandTracked && !f.rightHandTracked) return;
 
-    try {
-      let cached = handDataCache.get(f.frame_index);
-      if (!cached) {
-        const meta = await getFrameMetadata(sessionId, f.frame_index);
-        if (!meta.tracking) {
-          cached = { left: null, right: null };
-        } else {
-          cached = {
-            left: parseHandJoints(meta.tracking, "left"),
-            right: parseHandJoints(meta.tracking, "right"),
-          };
-        }
-        handDataCache.set(f.frame_index, cached);
-      }
+    const handData = await fetchHandData(f.frame_index);
 
-      if (cached.left) {
-        const handGroup = createHandMesh(cached.left, HAND_LEFT_COLOR, scale);
-        scene.add(handGroup);
-        activeHandGroups.push(handGroup);
-      }
+    if (handData.left) {
+      const handGroup = createHandMesh(handData.left, HAND_LEFT_COLOR, scale);
+      scene.add(handGroup);
+      activeHandGroups.push(handGroup);
+    }
 
-      if (cached.right) {
-        const handGroup = createHandMesh(cached.right, HAND_RIGHT_COLOR, scale);
-        scene.add(handGroup);
-        activeHandGroups.push(handGroup);
-      }
-    } catch {
+    if (handData.right) {
+      const handGroup = createHandMesh(handData.right, HAND_RIGHT_COLOR, scale);
+      scene.add(handGroup);
+      activeHandGroups.push(handGroup);
     }
   }
 
@@ -1197,6 +1332,7 @@ export async function initSpatialViewer(
     updateVisuals();
     updateSidebar();
     updateInfoSidebar();
+    if (idx !== null) startPrefetch(idx);
   }
 
   function updateVisuals() {
@@ -1234,27 +1370,76 @@ export async function initSpatialViewer(
       wrap.querySelector(".spatial-sidebar")!.appendChild(panel);
 
       const tabs = panel.querySelectorAll(".spatial-info-tab");
+      const imgContainer = panel.querySelector(".spatial-info-image-container") as HTMLDivElement | null;
       const img = panel.querySelector(".spatial-info-image") as HTMLImageElement | null;
-      if (img) {
-        img.crossOrigin = "anonymous";
-        img.onerror = () => {
-          img.style.display = "none";
-        };
-        img.onload = () => {
-          img.style.display = "block";
-        };
+      const loadingEl = panel.querySelector(".spatial-info-image-loading") as HTMLDivElement | null;
+      const emptyEl = panel.querySelector(".spatial-info-image-empty") as HTMLParagraphElement | null;
+
+      if (!imgContainer || !img) return;
+
+      const frame = cameraPoints[selectedIdx].frame;
+
+      function showLoading() {
+        img!.style.display = "none";
+        if (emptyEl) emptyEl.style.display = "none";
+        if (loadingEl) loadingEl.style.display = "";
       }
-      if (tabs.length && img) {
-        tabs.forEach((tab) => {
-          tab.addEventListener("click", () => {
-            tabs.forEach((t) => t.classList.remove("active"));
-            tab.classList.add("active");
-            const type = (tab as HTMLElement).dataset.imgType;
-            img.style.display = "";
-            img.src = type === "depth" ? img.dataset.depthUrl! : img.dataset.colorUrl!;
-          });
+
+      function showImage() {
+        img!.style.display = "block";
+        if (emptyEl) emptyEl.style.display = "none";
+        if (loadingEl) loadingEl.style.display = "none";
+      }
+
+      function showEmpty(type: string) {
+        img!.style.display = "none";
+        if (loadingEl) loadingEl.style.display = "none";
+        if (emptyEl) {
+          emptyEl.textContent = `No ${type} image available`;
+          emptyEl.style.display = "";
+        }
+      }
+
+      img.onerror = () => showEmpty(getCurrentTab());
+      img.onload = () => showImage();
+
+      function getCurrentTab(): string {
+        const active = panel.querySelector(".spatial-info-tab.active") as HTMLElement | null;
+        return active?.dataset.imgType ?? "color";
+      }
+
+      function loadTab(type: "color" | "depth") {
+        const hasIt = type === "color" ? frame.hasColor : frame.hasDepth;
+        if (!hasIt) {
+          showEmpty(type);
+          return;
+        }
+        const frameIdx = frame.frame_index;
+        const key = `${type}:${frameIdx}`;
+        const cached = imageBlobCache.get(key);
+        if (cached) {
+          img!.src = cached;
+          return;
+        }
+        showLoading();
+        const url = type === "color" ? img!.dataset.colorUrl! : img!.dataset.depthUrl!;
+        fetchAuthImage(url, key).then((blobUrl) => {
+          if (blobUrl) img!.src = blobUrl;
+          else showEmpty(type);
         });
       }
+
+      const initialTab = frame.hasColor ? "color" : "depth";
+      loadTab(initialTab as "color" | "depth");
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          tabs.forEach((t) => t.classList.remove("active"));
+          tab.classList.add("active");
+          const type = (tab as HTMLElement).dataset.imgType as "color" | "depth";
+          loadTab(type);
+        });
+      });
     }
   }
 
@@ -1305,13 +1490,13 @@ export async function initSpatialViewer(
       clearTimeout(playTimer);
       playTimer = null;
     }
-    playBtn.textContent = "▶";
+    playBtn.textContent = "\u25B6";
     playBtn.title = "Play through all frames";
   }
 
   async function startPlayback() {
     isPlaying = true;
-    playBtn.textContent = "⏸";
+    playBtn.textContent = "\u23F8";
     playBtn.title = "Pause playback";
 
     const startIdx = selectedIdx !== null ? selectedIdx : 0;
@@ -1440,6 +1625,9 @@ export async function initSpatialViewer(
     disposed = true;
     stopPlayback();
     clearHands();
+    if (prefetchAbort) prefetchAbort.abort();
+    for (const url of imageBlobCache.values()) URL.revokeObjectURL(url);
+    imageBlobCache.clear();
     if (markerGroup.children.length > 0) {
       scene.remove(markerGroup);
       disposeGroup(markerGroup);
@@ -1457,3 +1645,4 @@ export async function initSpatialViewer(
     });
   };
 }
+

@@ -1,9 +1,10 @@
 import {
-  API_KEY,
   getFramesPaginated,
   getFrameMetadata,
   getColorImageUrl,
   getDepthImageUrl,
+  listImages,
+  API_KEY,
 } from "../../lib/api";
 import {
   blobCache,
@@ -17,10 +18,14 @@ import {
   setGalleryCurrentIdx,
   setGalleryTab,
   setPreloadAbort,
+  colorFilenameMap,
+  depthFilenameMap,
+  populateFilenameMaps,
+  clearFilenameMaps,
 } from "./state";
 import { escapeHtml, renderMetaObject } from "./utils";
 
-const PREFETCH_RADIUS = 5;
+const PREFETCH_RADIUS = 10;
 
 function cacheKey(type: "color" | "depth", frameIndex: number): string {
   return `${type}:${frameIndex}`;
@@ -32,26 +37,77 @@ async function fetchImageAsBlob(
   signal?: AbortSignal,
 ): Promise<string> {
   if (blobCache.has(key)) return blobCache.get(key)!;
-  const res = await fetch(url, {
-    headers: { "X-API-Key": API_KEY },
-    signal,
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
-  const blob = await res.blob();
-  const blobUrl = URL.createObjectURL(blob);
-  blobCache.set(key, blobUrl);
-  return blobUrl;
+  const headers: Record<string, string> = {};
+  if (API_KEY) headers["X-API-Key"] = API_KEY;
+
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { signal, headers, cache: "no-store" });
+      if (!res.ok) {
+        lastErr = new Error(`HTTP ${res.status} ${res.statusText}`);
+        if (attempt === 0 && res.status === 404) {
+          await new Promise((r) => setTimeout(r, 300));
+          continue;
+        }
+        throw lastErr;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      blobCache.set(key, blobUrl);
+      return blobUrl;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 300));
+        continue;
+      }
+    }
+  }
+  throw lastErr ?? new Error("Failed to fetch image");
 }
 
-function getFrameFilename(frameIndex: number): string {
+function getFrameFilename(type: "color" | "depth", frameIndex: number): string {
+  const map = type === "color" ? colorFilenameMap : depthFilenameMap;
+  const cached = map.get(frameIndex);
+  if (cached) return cached;
   return `frame_${String(frameIndex).padStart(4, "0")}.png`;
 }
 
 function getRawImageUrl(type: "color" | "depth", frameIndex: number): string {
-  const filename = getFrameFilename(frameIndex);
+  const filename = getFrameFilename(type, frameIndex);
   return type === "color"
     ? getColorImageUrl(gallerySessionId, filename)
     : getDepthImageUrl(gallerySessionId, filename);
+}
+
+function evictOutsideWindow(
+  type: "color" | "depth",
+  centerIdx: number,
+  frames: { frame_index: number }[],
+) {
+  const start = Math.max(0, centerIdx - PREFETCH_RADIUS);
+  const end = Math.min(frames.length - 1, centerIdx + PREFETCH_RADIUS);
+  const keepSet = new Set<string>();
+  for (let i = start; i <= end; i++) {
+    keepSet.add(cacheKey(type, frames[i].frame_index));
+  }
+  for (const [key, url] of blobCache) {
+    if (key.startsWith(type + ":") && !keepSet.has(key)) {
+      URL.revokeObjectURL(url);
+      blobCache.delete(key);
+    }
+  }
+}
+
+function outwardIndices(centerIdx: number, total: number): number[] {
+  const indices: number[] = [centerIdx];
+  for (let d = 1; d <= PREFETCH_RADIUS; d++) {
+    if (centerIdx + d < total) indices.push(centerIdx + d);
+    if (centerIdx - d >= 0) indices.push(centerIdx - d);
+  }
+  return indices;
 }
 
 async function prefetchNearby(
@@ -60,10 +116,9 @@ async function prefetchNearby(
   frames: { frame_index: number; hasColor: boolean; hasDepth: boolean }[],
   signal: AbortSignal,
 ): Promise<void> {
-  const start = Math.max(0, centerIdx - PREFETCH_RADIUS);
-  const end = Math.min(frames.length - 1, centerIdx + PREFETCH_RADIUS);
+  evictOutsideWindow(type, centerIdx, frames);
 
-  for (let i = start; i <= end; i++) {
+  for (const i of outwardIndices(centerIdx, frames.length)) {
     if (signal.aborted) return;
     const frame = frames[i];
     const has = type === "color" ? frame.hasColor : frame.hasDepth;
@@ -86,6 +141,7 @@ export function cleanupGallery() {
   }
   for (const url of blobCache.values()) URL.revokeObjectURL(url);
   blobCache.clear();
+  clearFilenameMaps();
 }
 
 let galleryElements: {
@@ -123,7 +179,7 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
         <div class="viewer-main">
-          <div class="viewer-loading hidden"><span class="spinner"></span></div>
+          <div class="viewer-loading hidden"><svg viewBox="0 0 24 24" width="28" height="28"><circle cx="12" cy="12" r="10" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2.5"/><circle cx="12" cy="12" r="10" fill="none" stroke="rgba(109,93,252,0.7)" stroke-width="2.5" stroke-dasharray="31.4 31.4" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.7s" repeatCount="indefinite"/></circle></svg></div>
           <img class="viewer-img" alt="" />
           <p class="viewer-empty hidden">No images available.</p>
         </div>
@@ -220,13 +276,29 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
   viewerStrip.innerHTML = "";
 
   try {
-    const data = await getFramesPaginated(sessionId, 9999, 0);
+    const [data, imageList] = await Promise.all([
+      getFramesPaginated(sessionId, 9999, 0),
+      listImages(sessionId, 9999, 0).catch(() => null),
+    ]);
+
+    if (imageList) {
+      populateFilenameMaps(imageList.color_images ?? [], imageList.depth_images ?? []);
+    }
+
     const seen = new Set<number>();
     const uniqueFrames = data.frames.filter((f) => {
       if (seen.has(f.frame_index)) return false;
       seen.add(f.frame_index);
       return true;
     });
+
+    if (imageList) {
+      for (const f of uniqueFrames) {
+        f.hasColor = colorFilenameMap.has(f.frame_index);
+        f.hasDepth = depthFilenameMap.has(f.frame_index);
+      }
+    }
+
     setGalleryFrames(uniqueFrames);
 
     if (galleryFrames.length === 0) {
@@ -326,10 +398,11 @@ async function showFrame(idx: number) {
       viewerImg.classList.remove("hidden");
       viewerLoading.classList.add("hidden");
     }
-  } catch {
+  } catch (err) {
     if (galleryCurrentIdx === idx) {
       viewerLoading.classList.add("hidden");
-      viewerEmpty.textContent = `Failed to load ${galleryTab} image.`;
+      const msg = err instanceof Error ? err.message : String(err);
+      viewerEmpty.textContent = `Failed to load ${galleryTab} image (${msg}).`;
       viewerEmpty.classList.remove("hidden");
     }
   }
@@ -371,3 +444,4 @@ async function openFrameMetadata(frameIndex: number) {
 }
 
 export function initGalleryEvents() {}
+

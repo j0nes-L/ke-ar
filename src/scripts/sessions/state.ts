@@ -22,6 +22,28 @@ export const blobCache = new Map<string, string>();
 export const audioBlobCache = new Map<string, string>();
 export let preloadAbort: AbortController | null = null;
 
+export const colorFilenameMap = new Map<number, string>();
+export const depthFilenameMap = new Map<number, string>();
+
+export function clearFilenameMaps() {
+  colorFilenameMap.clear();
+  depthFilenameMap.clear();
+}
+
+export function populateFilenameMaps(colorImages: string[], depthImages: string[]) {
+  colorFilenameMap.clear();
+  depthFilenameMap.clear();
+  const re = /frame_(\d+)\.\w+$/;
+  for (const name of colorImages) {
+    const m = name.match(re);
+    if (m) colorFilenameMap.set(parseInt(m[1], 10), name);
+  }
+  for (const name of depthImages) {
+    const m = name.match(re);
+    if (m) depthFilenameMap.set(parseInt(m[1], 10), name);
+  }
+}
+
 export let pendingUploadFiles: File[] = [];
 
 export function setCurrentOffset(v: number) { currentOffset = v; }

@@ -1731,6 +1731,37 @@ const base = import.meta.env.BASE_URL;
     gap: 0.3rem;
   }
 
+  :global(.spatial-info-image-container) {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border-radius: 4px;
+    border: 1px solid var(--color-border);
+    background: #111113;
+    overflow: hidden;
+  }
+
+  :global(.spatial-info-image-loading) {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+  }
+
+  :global(.spatial-info-image-empty) {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.65rem;
+    z-index: 1;
+  }
+
+
   :global(.spatial-info-image-tabs) {
     display: flex;
     gap: 2px;
@@ -1764,13 +1795,14 @@ const base = import.meta.env.BASE_URL;
 
   :global(.spatial-info-image) {
     width: 100%;
-    border-radius: 4px;
-    border: 1px solid var(--color-border);
+    height: 100%;
+    border: none;
     object-fit: contain;
-    max-height: 160px;
-    min-height: 60px;
-    background: #111113;
+    background: transparent;
     display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 2;
   }
 
   /* Tooltip */
