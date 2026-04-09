@@ -240,21 +240,17 @@ export function initList() {
       uploadSessionIdRow.classList.add("hidden");
       startUpload(files);
     } else {
-      // Show extraction status
       uploadStatus.textContent = "Reading session ID from file headers…";
       uploadStatus.className = "upload-status";
       uploadStatus.classList.remove("hidden");
 
-      // Read session ID from .bin/.wav file headers or filenames
       const extracted = await extractSessionIdFromFiles(files);
       if (extracted) {
-        // Session ID found – start upload automatically
         uploadStatus.textContent = `Session ID found: ${extracted}`;
         uploadStatus.className = "upload-status success";
         uploadSessionIdRow.classList.add("hidden");
         startUpload(files, extracted);
       } else {
-        // No session ID found – ask user to enter one
         uploadStatus.textContent = "Could not read session ID from file. Please enter it manually.";
         uploadStatus.className = "upload-status error";
         setPendingUploadFiles(files);

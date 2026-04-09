@@ -808,7 +808,30 @@ async function loadMarkers(sessionId: string): Promise<MarkerData[]> {
     for (const entry of rawMarkers) {
       if (!entry || typeof entry !== "object") continue;
       const m = entry as Record<string, unknown>;
-      const name = typeof m.name === "string" ? m.name : typeof m.Name === "string" ? m.Name : typeof m.id === "string" ? m.id : "Marker";
+      const nameFields = [
+        "name", "Name", "id", "Id", "ID",
+        "decodedText", "DecodedText", "decoded_text",
+        "data", "Data",
+        "text", "Text",
+        "value", "Value",
+        "code", "Code",
+        "label", "Label",
+        "content", "Content",
+        "payload", "Payload",
+        "markerName", "MarkerName", "marker_name",
+        "markerId", "MarkerId", "marker_id",
+        "markerValue", "MarkerValue", "marker_value",
+        "qrCode", "QrCode", "qr_code",
+        "qrData", "QrData", "qr_data",
+        "qrValue", "QrValue", "qr_value",
+      ];
+      let name = "Marker";
+      for (const key of nameFields) {
+        if (typeof m[key] === "string" && m[key]) {
+          name = m[key] as string;
+          break;
+        }
+      }
       const posRaw = tryVec3(m.position) ?? tryVec3(m.Position) ?? tryVec3(m.pos);
       if (!posRaw) continue;
       const rotRaw = tryQuat(m.rotation) ?? tryQuat(m.Rotation) ?? tryQuat(m.rot) ?? tryQuat(m.orientation);
@@ -1093,6 +1116,7 @@ export async function initSpatialViewer(
   let hoveredIdx: number | null = null;
   const raycaster = new THREE.Raycaster();
   const mouse = new THREE.Vector2();
+  let mouseDownPos: { x: number; y: number } | null = null;
 
   function disposeGroup(group: THREE.Group) {
     group.traverse((obj) => {
@@ -1305,6 +1329,10 @@ export async function initSpatialViewer(
     stopPlayback();
   }
 
+  canvas.addEventListener("mousedown", (e) => {
+    mouseDownPos = { x: e.clientX, y: e.clientY };
+  });
+
   canvas.addEventListener("mousemove", (e) => {
     const r = canvas.getBoundingClientRect();
     const mx = ((e.clientX - r.left) / r.width) * 2 - 1;
@@ -1355,6 +1383,11 @@ export async function initSpatialViewer(
   });
 
   canvas.addEventListener("click", (e) => {
+    if (mouseDownPos) {
+      const dx = e.clientX - mouseDownPos.x;
+      const dy = e.clientY - mouseDownPos.y;
+      if (dx * dx + dy * dy > 25) return;
+    }
     if (isPlaying) stopPlayback();
     const idx = getIntersectedCameraIdx(e);
     setSelected(idx !== null ? (idx === selectedIdx ? null : idx) : null);

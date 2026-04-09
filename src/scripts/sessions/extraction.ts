@@ -12,6 +12,7 @@ import {
   setGallerySessionId,
   setGalleryFrames,
   setGalleryCurrentIdx,
+  onSessionChanged,
 } from "./state";
 import { buildBlockBar } from "./utils";
 import { loadGallery, cleanupGallery } from "./gallery";
@@ -90,7 +91,6 @@ export async function initExtraction(
   setGallerySessionId(sessionId);
   container.innerHTML = "";
 
-  // Check if images already exist → show gallery
   let hasImages = false;
   try {
     const status = await getImageStatus(sessionId);
@@ -101,7 +101,6 @@ export async function initExtraction(
     }
   } catch {}
 
-  // Check if bin exists → show extraction UI
   let binExists = false;
   try {
     const binCheck = await checkBin(sessionId);
@@ -118,7 +117,6 @@ export async function initExtraction(
     }
   } catch {}
 
-  // Fallback: check if any bin file is referenced
   if (!binExists && !hasImages) {
     container.innerHTML = `<p class="accordion-empty">No visual data available.</p>`;
   }
@@ -130,7 +128,7 @@ export async function startExtraction(sessionId: string, container: HTMLDivEleme
   ui.btnExtract.disabled = true;
   ui.extractError.classList.add("hidden");
   ui.progressWrap.classList.remove("hidden");
-  ui.progressBar.textContent = buildBlockBar(0);
+  ui.progressBar.innerHTML = buildBlockBar(0);
   ui.progressPct.textContent = "0%";
   ui.progressLabel.textContent = "Starting extraction\u2026";
 
@@ -142,7 +140,7 @@ export async function startExtraction(sessionId: string, container: HTMLDivEleme
   }) => {
     const pct = Math.round(data.progress_percent ?? 0);
     ui.progressPct.textContent = `${pct}%`;
-    ui.progressBar.textContent = buildBlockBar(pct);
+    ui.progressBar.innerHTML = buildBlockBar(pct);
     if (data.current_frame != null && data.total_frames != null) {
       ui.progressLabel.textContent = `Extracting frame ${data.current_frame} / ${data.total_frames}\u2026`;
     } else if (data.status) {
@@ -153,10 +151,11 @@ export async function startExtraction(sessionId: string, container: HTMLDivEleme
   const onComplete = () => {
     ui.progressLabel.textContent = "Extraction complete!";
     ui.progressPct.textContent = "100%";
-    ui.progressBar.textContent = buildBlockBar(100);
+    ui.progressBar.innerHTML = buildBlockBar(100);
     setTimeout(() => {
       container.innerHTML = "";
       loadGallery(sessionId, container);
+      if (onSessionChanged) onSessionChanged(sessionId);
     }, 800);
   };
 
@@ -239,6 +238,4 @@ export async function startExtraction(sessionId: string, container: HTMLDivEleme
   }
 }
 
-export function initExtractionEvents() {
-  // No-op: events are now bound dynamically in initExtraction
-}
+export function initExtractionEvents() {}

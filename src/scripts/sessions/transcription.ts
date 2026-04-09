@@ -3,6 +3,7 @@ import {
   startTranscription,
   getTranscriptionProgress,
   getTranscriptResult,
+  getTranscriptionStreamUrl,
 } from "../../lib/api";
 import type { TranscriptResult } from "../../lib/api";
 import { setCurrentTranscript } from "./state";
@@ -44,7 +45,6 @@ export function renderTranscriptInContainer(result: TranscriptResult, container:
     `;
     const timeEl = segEl.querySelector(".transcript-time") as HTMLElement;
     timeEl.addEventListener("click", () => {
-      // Find the closest audio element in the accordion content
       const accordionContent = container.closest(".accordion-content-inner");
       const audio = accordionContent?.querySelector("audio") as HTMLAudioElement | null;
       if (audio) {
@@ -65,7 +65,6 @@ export function renderTranscriptInContainer(result: TranscriptResult, container:
   wrapper.appendChild(segmentsWrap);
   container.appendChild(wrapper);
 
-  // Sync highlight with audio playback
   const accordionContent = container.closest(".accordion-content-inner");
   const audio = accordionContent?.querySelector("audio") as HTMLAudioElement | null;
   if (audio) {
@@ -102,10 +101,8 @@ function buildTranscriptionUI(container: HTMLElement): {
       <h3 class="extraction-title">Transcription</h3>
       <div class="transcription-controls">
         <select class="transcription-model-select">
-          <option value="tiny">tiny – Very fast</option>
+          <option value="small">small – Fast</option>
           <option value="base" selected>base – Standard</option>
-          <option value="small">small – Good Balance</option>
-          <option value="medium">medium – High Quality</option>
           <option value="large">large – Best Quality</option>
         </select>
         <button class="btn btn-primary btn-sm transcribe-btn">
@@ -168,7 +165,6 @@ export async function initTranscription(
       return;
     }
 
-    // No transcript yet → show transcription UI
     const ui = buildTranscriptionUI(transcriptContainer);
     ui.transcribeInfo.textContent = `Audio file "${check.audio_filename}" available for transcription.`;
     ui.transcribeInfo.classList.remove("hidden");
@@ -185,9 +181,10 @@ async function startTranscriptionProcess(
   transcriptContainer: HTMLElement,
 ) {
   ui.btnTranscribe.disabled = true;
+  ui.modelSelect.disabled = true;
   ui.transcribeError.classList.add("hidden");
   ui.progressWrap.classList.remove("hidden");
-  ui.progressBar.textContent = buildBlockBar(0);
+  ui.progressBar.innerHTML = buildBlockBar(0);
   ui.progressPct.textContent = "0%";
   ui.progressLabel.textContent = "Starting transcription\u2026";
 
@@ -200,7 +197,7 @@ async function startTranscriptionProcess(
   }) => {
     const pct = Math.round(data.progress_percent ?? 0);
     ui.progressPct.textContent = `${pct}%`;
-    ui.progressBar.textContent = buildBlockBar(pct);
+    ui.progressBar.innerHTML = buildBlockBar(pct);
     if (data.current_step) {
       ui.progressLabel.textContent = data.current_step;
     } else if (data.status) {
@@ -211,7 +208,7 @@ async function startTranscriptionProcess(
   const onComplete = async () => {
     ui.progressLabel.textContent = "Transcription complete!";
     ui.progressPct.textContent = "100%";
-    ui.progressBar.textContent = buildBlockBar(100);
+    ui.progressBar.innerHTML = buildBlockBar(100);
 
     try {
       const result = await getTranscriptResult(sessionId);
@@ -233,6 +230,7 @@ async function startTranscriptionProcess(
     ui.transcribeError.textContent = msg;
     ui.transcribeError.classList.remove("hidden");
     ui.btnTranscribe.disabled = false;
+    ui.modelSelect.disabled = false;
   };
 
   const pollTranscription = () => {
@@ -248,7 +246,7 @@ async function startTranscriptionProcess(
           onError(progress.error || "Transcription failed");
           return;
         }
-        setTimeout(poll, 2000);
+        setTimeout(poll, 1000);
       } catch {
         try {
           const check = await checkTranscription(sessionId);
@@ -260,12 +258,36 @@ async function startTranscriptionProcess(
         onError("Lost connection to transcription progress.");
       }
     };
-    setTimeout(poll, 2000);
+    setTimeout(poll, 1000);
   };
 
   try {
-    await startTranscription(sessionId, model, true);
-    pollTranscription();
+    const transcribePromise = startTranscription(sessionId, model, true).catch(() => {});
+
+    const streamUrl = getTranscriptionStreamUrl(sessionId, model);
+    const es = new EventSource(streamUrl);
+
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        updateProgress(data);
+        if (data.status === "completed" || data.status === "done") {
+          es.close();
+          onComplete();
+        }
+        if (data.status === "error" || data.status === "failed") {
+          es.close();
+          onError(data.error || data.errors?.join(", ") || "Transcription failed");
+        }
+      } catch {}
+    };
+
+    es.onerror = () => {
+      es.close();
+      pollTranscription();
+    };
+
+    await transcribePromise;
   } catch {
     try {
       await startTranscription(sessionId, model, false);
@@ -276,11 +298,8 @@ async function startTranscriptionProcess(
   }
 }
 
-export function initTranscriptionEvents() {
-  // No-op: events are now bound dynamically in initTranscription
-}
+export function initTranscriptionEvents() {}
 
-// Keep old renderTranscriptInAudio for backward compat - delegates to new function
 export function renderTranscriptInAudio(result: TranscriptResult) {
   if (activeTranscriptContainer) {
     renderTranscriptInContainer(result, activeTranscriptContainer);

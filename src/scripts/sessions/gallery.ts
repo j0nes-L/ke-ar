@@ -20,10 +20,7 @@ import {
 } from "./state";
 import { escapeHtml, renderMetaObject } from "./utils";
 
-// ── Constants ────────────────────────────────────────────────────────
-const PREFETCH_CONCURRENCY = 6;
-
-// ── Helpers ──────────────────────────────────────────────────────────
+const PREFETCH_RADIUS = 5;
 
 function cacheKey(type: "color" | "depth", frameIndex: number): string {
   return `${type}:${frameIndex}`;
@@ -57,61 +54,30 @@ function getRawImageUrl(type: "color" | "depth", frameIndex: number): string {
     : getDepthImageUrl(gallerySessionId, filename);
 }
 
-// ── Preloader ────────────────────────────────────────────────────────
-
-interface PreloadProgress {
-  loaded: number;
-  total: number;
-  failed: number;
-}
-
-async function prefetchAll(
+async function prefetchNearby(
   type: "color" | "depth",
+  centerIdx: number,
   frames: { frame_index: number; hasColor: boolean; hasDepth: boolean }[],
   signal: AbortSignal,
-  onProgress: (p: PreloadProgress) => void,
 ): Promise<void> {
-  const eligible = frames.filter((f) =>
-    type === "color" ? f.hasColor : f.hasDepth,
-  );
-  const total = eligible.length;
-  let loaded = 0;
-  let failed = 0;
+  const start = Math.max(0, centerIdx - PREFETCH_RADIUS);
+  const end = Math.min(frames.length - 1, centerIdx + PREFETCH_RADIUS);
 
-  onProgress({ loaded: 0, total, failed: 0 });
-
-  let cursor = 0;
-
-  async function next(): Promise<void> {
-    while (cursor < eligible.length) {
+  for (let i = start; i <= end; i++) {
+    if (signal.aborted) return;
+    const frame = frames[i];
+    const has = type === "color" ? frame.hasColor : frame.hasDepth;
+    if (!has) continue;
+    const key = cacheKey(type, frame.frame_index);
+    if (blobCache.has(key)) continue;
+    const url = getRawImageUrl(type, frame.frame_index);
+    try {
+      await fetchImageAsBlob(url, key, signal);
+    } catch {
       if (signal.aborted) return;
-      const frame = eligible[cursor++];
-      const key = cacheKey(type, frame.frame_index);
-      if (blobCache.has(key)) {
-        loaded++;
-        onProgress({ loaded, total, failed });
-        continue;
-      }
-      const url = getRawImageUrl(type, frame.frame_index);
-      try {
-        await fetchImageAsBlob(url, key, signal);
-        loaded++;
-      } catch {
-        if (signal.aborted) return;
-        failed++;
-      }
-      onProgress({ loaded, total, failed });
     }
   }
-
-  const workers = Array.from(
-    { length: Math.min(PREFETCH_CONCURRENCY, eligible.length) },
-    () => next(),
-  );
-  await Promise.allSettled(workers);
 }
-
-// ── Cleanup ──────────────────────────────────────────────────────────
 
 export function cleanupGallery() {
   if (preloadAbort) {
@@ -122,7 +88,6 @@ export function cleanupGallery() {
   blobCache.clear();
 }
 
-// ── Gallery elements bound per-load ──────────────────────────────────
 let galleryElements: {
   viewerImg: HTMLImageElement;
   viewerLoading: HTMLDivElement;
@@ -131,13 +96,8 @@ let galleryElements: {
   viewerPrev: HTMLButtonElement;
   viewerNext: HTMLButtonElement;
   viewerFrameInfo: HTMLSpanElement;
-  preloadBar: HTMLDivElement;
-  preloadText: HTMLSpanElement;
-  preloadIndicator: HTMLDivElement;
   galleryTabBtns: NodeListOf<HTMLButtonElement>;
 } | null = null;
-
-// ── Main entry ───────────────────────────────────────────────────────
 
 export async function loadGallery(sessionId: string, container: HTMLDivElement) {
   cleanupGallery();
@@ -152,10 +112,6 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
       <div class="gallery-header">
         <h3 class="gallery-title">Session Images</h3>
         <div class="gallery-header-right">
-          <div class="preload-indicator hidden">
-            <span class="preload-text">Loading…</span>
-            <div class="preload-track"><div class="preload-bar"></div></div>
-          </div>
           <div class="gallery-tabs">
             <button class="gallery-tab active" data-tab="color">Color</button>
             <button class="gallery-tab" data-tab="depth">Depth</button>
@@ -195,9 +151,6 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
   const viewerNext = root.querySelector(".viewer-next") as HTMLButtonElement;
   const viewerFrameInfo = root.querySelector(".viewer-frame-info") as HTMLSpanElement;
   const viewerMetaBtn = root.querySelector(".viewer-meta-btn") as HTMLButtonElement;
-  const preloadIndicator = root.querySelector(".preload-indicator") as HTMLDivElement;
-  const preloadBar = root.querySelector(".preload-bar") as HTMLDivElement;
-  const preloadText = root.querySelector(".preload-text") as HTMLSpanElement;
   const galleryTabBtns = root.querySelectorAll(".gallery-tab") as NodeListOf<HTMLButtonElement>;
 
   galleryElements = {
@@ -208,13 +161,9 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
     viewerPrev,
     viewerNext,
     viewerFrameInfo,
-    preloadBar,
-    preloadText,
-    preloadIndicator,
     galleryTabBtns,
   };
 
-  // ── Bind events ──
   viewerPrev.addEventListener("click", () => showFrame(galleryCurrentIdx - 1));
   viewerNext.addEventListener("click", () => showFrame(galleryCurrentIdx + 1));
 
@@ -243,7 +192,6 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
       setGalleryTab(newTab);
       galleryTabBtns.forEach((t) => t.classList.toggle("active", t.dataset.tab === newTab));
       showFrame(galleryCurrentIdx);
-      startPreload();
     });
   });
 
@@ -251,7 +199,6 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
     if (galleryFrames.length > 0) openFrameMetadata(galleryFrames[galleryCurrentIdx].frame_index);
   });
 
-  // Setup frame-meta-overlay close handlers (global modal)
   const frameMetaOverlay = document.getElementById("frame-meta-overlay");
   const frameMetaClose = document.getElementById("frame-meta-close");
   if (frameMetaClose && frameMetaOverlay) {
@@ -267,7 +214,6 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
     };
   }
 
-  // ── Load frame data ──
   viewerImg.src = "";
   viewerImg.classList.add("hidden");
   viewerEmpty.classList.add("hidden");
@@ -290,71 +236,20 @@ export async function loadGallery(sessionId: string, container: HTMLDivElement) 
 
     renderStrip();
     await showFrame(0);
-
-    // Start background preload of ALL images
-    startPreload();
   } catch (err) {
     viewerEmpty.textContent = `Error: ${(err as Error).message}`;
     viewerEmpty.classList.remove("hidden");
   }
 }
 
-// ── Background preload orchestrator ──────────────────────────────────
-
-function startPreload() {
+function prefetchAroundIndex(idx: number) {
   if (preloadAbort) {
     preloadAbort.abort();
   }
   const ac = new AbortController();
   setPreloadAbort(ac);
-
-  if (!galleryElements) return;
-  const { preloadBar, preloadText, preloadIndicator } = galleryElements;
-
-  const activeTab = galleryTab;
-  const eligibleCount = galleryFrames.filter((f) =>
-    activeTab === "color" ? f.hasColor : f.hasDepth,
-  ).length;
-
-  const cachedCount = galleryFrames.filter((f) => {
-    const has = activeTab === "color" ? f.hasColor : f.hasDepth;
-    return has && blobCache.has(cacheKey(activeTab, f.frame_index));
-  }).length;
-
-  if (cachedCount >= eligibleCount) {
-    preloadIndicator.classList.add("hidden");
-    preloadOtherTab(ac.signal);
-    return;
-  }
-
-  preloadIndicator.classList.remove("hidden");
-  preloadText.textContent = `${cachedCount} / ${eligibleCount}`;
-  preloadBar.style.width = eligibleCount > 0 ? `${(cachedCount / eligibleCount) * 100}%` : "0%";
-
-  prefetchAll(activeTab, galleryFrames, ac.signal, (p) => {
-    if (ac.signal.aborted) return;
-    preloadText.textContent = `${p.loaded} / ${p.total}`;
-    preloadBar.style.width = p.total > 0 ? `${(p.loaded / p.total) * 100}%` : "0%";
-    if (p.loaded >= p.total) {
-      setTimeout(() => {
-        if (!ac.signal.aborted) {
-          preloadIndicator.classList.add("hidden");
-        }
-      }, 600);
-    }
-  }).then(() => {
-    if (!ac.signal.aborted) {
-      preloadOtherTab(ac.signal);
-    }
-  });
+  prefetchNearby(galleryTab, idx, galleryFrames, ac.signal);
 }
-
-function preloadOtherTab(signal: AbortSignal) {
-  const otherTab = galleryTab === "color" ? "depth" : "color";
-  prefetchAll(otherTab, galleryFrames, signal, () => {});
-}
-
-// ── Strip rendering ──────────────────────────────────────────────────
 
 function renderStrip() {
   if (!galleryElements) return;
@@ -370,13 +265,13 @@ function renderStrip() {
   });
 }
 
-// ── Show a single frame ──────────────────────────────────────────────
-
 async function showFrame(idx: number) {
   if (!galleryElements) return;
   if (idx < 0 || idx >= galleryFrames.length) return;
   setGalleryCurrentIdx(idx);
   const frame = galleryFrames[idx];
+
+  prefetchAroundIndex(idx);
 
   const {
     viewerStrip,
@@ -408,7 +303,6 @@ async function showFrame(idx: number) {
     return;
   }
 
-  // Check cache first – instant display without spinner
   const key = cacheKey(galleryTab, frame.frame_index);
   if (blobCache.has(key)) {
     viewerImg.src = blobCache.get(key)!;
@@ -419,7 +313,6 @@ async function showFrame(idx: number) {
     return;
   }
 
-  // Not yet cached – show spinner and fetch
   viewerLoading.classList.remove("hidden");
   viewerImg.classList.add("hidden");
   viewerEmpty.classList.add("hidden");
@@ -441,8 +334,6 @@ async function showFrame(idx: number) {
     }
   }
 }
-
-// ── Frame metadata modal ─────────────────────────────────────────────
 
 async function openFrameMetadata(frameIndex: number) {
   const frameMetaTitle = document.getElementById("frame-meta-title");
@@ -479,6 +370,4 @@ async function openFrameMetadata(frameIndex: number) {
   }
 }
 
-export function initGalleryEvents() {
-  // No-op: events are now bound dynamically in loadGallery
-}
+export function initGalleryEvents() {}

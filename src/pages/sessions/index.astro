@@ -700,7 +700,7 @@ const base = import.meta.env.BASE_URL;
     color: var(--color-text-muted);
   }
 
-  .btn {
+  :global(.btn) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -717,48 +717,48 @@ const base = import.meta.env.BASE_URL;
       box-shadow 0.2s ease, border-color 0.2s ease;
   }
 
-  .btn:active:not(:disabled) {
+  :global(.btn):active:not(:disabled) {
     transform: scale(0.97);
   }
 
-  .btn-sm {
+  :global(.btn-sm) {
     padding: 0.35rem 0.75rem;
     font-size: 0.78rem;
   }
 
-  .btn-primary {
+  :global(.btn-primary) {
     background: var(--color-primary);
     color: #fff;
   }
 
-  .btn-primary:hover:not(:disabled) {
+  :global(.btn-primary):hover:not(:disabled) {
     background: var(--color-primary-hover);
     box-shadow: 0 4px 14px rgba(109, 93, 252, 0.25);
   }
 
-  .btn-primary:disabled {
+  :global(.btn-primary):disabled {
     opacity: 0.35;
     cursor: not-allowed;
   }
 
-  .btn-secondary {
+  :global(.btn-secondary) {
     background: var(--color-surface);
     color: var(--color-text);
     border: 1px solid var(--color-border);
   }
 
-  .btn-secondary:hover:not(:disabled) {
+  :global(.btn-secondary):hover:not(:disabled) {
     background: var(--color-surface-hover);
     border-color: var(--color-text-muted);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
   }
 
-  .btn-secondary:disabled {
+  :global(.btn-secondary):disabled {
     opacity: 0.35;
     cursor: not-allowed;
   }
 
-  .btn-ghost {
+  :global(.btn-ghost) {
     background: none;
     color: var(--color-text-muted);
     border: none;
@@ -768,7 +768,7 @@ const base = import.meta.env.BASE_URL;
     font-weight: 600;
   }
 
-  .btn-ghost:hover {
+  :global(.btn-ghost):hover {
     color: var(--color-text);
     background: var(--color-surface-hover);
   }
@@ -870,6 +870,14 @@ const base = import.meta.env.BASE_URL;
     color: var(--color-primary);
     white-space: pre;
     overflow: hidden;
+  }
+
+  :global(.bar-filled) {
+    opacity: 1;
+  }
+
+  :global(.bar-empty) {
+    opacity: 0.2;
   }
 
 

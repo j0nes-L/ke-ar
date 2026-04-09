@@ -36,3 +36,6 @@ export function setCurrentTranscript(v: TranscriptResult | null) { currentTransc
 export function setPendingUploadFiles(v: File[]) { pendingUploadFiles = v; }
 export function setPreloadAbort(v: AbortController | null) { preloadAbort = v; }
 
+export let onSessionChanged: ((sessionId: string) => void) | null = null;
+export function setOnSessionChanged(cb: ((sessionId: string) => void) | null) { onSessionChanged = cb; }
+

@@ -51,11 +51,14 @@ export function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
-import { BLOCK_TOTAL, BLOCK_FILLED, BLOCK_EMPTY } from "./state";
+import { BLOCK_TOTAL, BLOCK_FILLED } from "./state";
 
 export function buildBlockBar(percent: number): string {
   const filled = Math.round((percent / 100) * BLOCK_TOTAL);
-  return BLOCK_FILLED.repeat(filled) + BLOCK_EMPTY.repeat(BLOCK_TOTAL - filled);
+  const empty = BLOCK_TOTAL - filled;
+  const filledStr = BLOCK_FILLED.repeat(filled);
+  const emptyStr = BLOCK_FILLED.repeat(empty);
+  return `<span class="bar-filled">${filledStr}</span><span class="bar-empty">${emptyStr}</span>`;
 }
 
 export function renderAdvancedTable(obj: Record<string, unknown>): string {

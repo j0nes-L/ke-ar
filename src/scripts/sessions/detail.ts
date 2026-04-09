@@ -4,21 +4,18 @@ import {
   downloadFile,
 } from "../../lib/api";
 import type { SessionImageMetadata } from "../../lib/api";
-import { audioBlobCache } from "./state";
+import { audioBlobCache, setOnSessionChanged } from "./state";
 import { $, escapeHtml, formatDate, formatSize, renderAdvancedTable } from "./utils";
 import { initExtraction } from "./extraction";
 import { initTranscription } from "./transcription";
 import { resetExtractionUI } from "./extraction";
 import { resetTranscriptionUI } from "./transcription";
 
-// ── SVG icons ──────────────────────────────────────────────────────
 const ICON_AUDIO = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
 const ICON_VISUAL = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`;
 const ICON_SPATIAL = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`;
 const DL_ICON_SM = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`;
 const CHECK_SM = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-
-// ── Helpers ─────────────────────────────────────────────────────────
 
 function classifyFiles(files: { filename: string; size_bytes?: number }[]) {
   const audioExts = [".wav", ".mp3", ".ogg", ".flac", ".m4a"];
@@ -122,8 +119,6 @@ function createAccordion(
   return { details, content: inner };
 }
 
-// ── Audio player builder ────────────────────────────────────────────
-
 async function buildAudioPlayer(
   sessionId: string,
   filename: string,
@@ -211,9 +206,9 @@ async function buildAudioPlayer(
   }
 }
 
-// ── Main loadDetail ─────────────────────────────────────────────────
-
 export async function loadDetail(id: string) {
+  setOnSessionChanged((sid) => loadDetail(sid));
+
   const detailTitle = $("detail-title");
   const detailMeta = $("detail-meta");
   const detailMetaAdvanced = document.getElementById("detail-meta-advanced") as HTMLDetailsElement;
@@ -238,7 +233,6 @@ export async function loadDetail(id: string) {
       imgMeta = await getSessionImageMetadata(id);
     } catch {}
 
-    // ── Meta rendering ──
     const metaItems: { label: string; value: string }[] = [];
 
     const headsetType = imgMeta?.headsetType ?? s.headset_type ?? (s as any).headsetType ?? null;
@@ -298,7 +292,6 @@ export async function loadDetail(id: string) {
 
     detailLoading.classList.add("hidden");
 
-    // ── Classify files ──
     const { audio, visual, spatial } = classifyFiles(files);
 
     const wavFile = audio.find((f) => f.filename.toLowerCase().endsWith(".wav"));
@@ -309,7 +302,6 @@ export async function loadDetail(id: string) {
 
     detailFiles.innerHTML = "";
 
-    // ═══════ AUDIO DATA accordion ═══════
     if (wavFile || audio.length > 0) {
       const audioDlFiles: { filename: string; label: string }[] = [];
       for (const f of audio) {
@@ -341,7 +333,6 @@ export async function loadDetail(id: string) {
       detailFiles.appendChild(audioAccordion);
     }
 
-    // ═══════ VISUAL DATA accordion ═══════
     if (visual.length > 0 || imgMeta) {
       const visualDlFiles: { filename: string; label: string }[] = [];
       if (binFile) {
@@ -363,7 +354,6 @@ export async function loadDetail(id: string) {
       detailFiles.appendChild(visualAccordion);
     }
 
-    // ═══════ SPATIAL DATA accordion ═══════
     if (spatial.length > 0) {
       const spatialDlFiles: { filename: string; label: string }[] = [];
       if (markerFile) {
@@ -384,7 +374,6 @@ export async function loadDetail(id: string) {
         spatialDlFiles,
       );
 
-      // Lazy-load Three.js spatial viewer when accordion is opened
       const spatialViewerWrap = document.createElement("div");
       spatialContent.appendChild(spatialViewerWrap);
       let spatialLoaded = false;
@@ -414,4 +403,3 @@ export async function loadDetail(id: string) {
     resetTranscriptionUI();
   }
 }
-
