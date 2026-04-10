@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.PUBLIC_KE_AR_API_URL || "https://00224466.xyz/api/ke-ar";
+const API_URL = import.meta.env.PUBLIC_KE_AR_API_URL || "https://api.00224466.xyz/ke-ar";
 const API_KEY = import.meta.env.PUBLIC_KE_AR_API_KEY || "";
 
 const IMAGE_API_URL = API_URL.replace(/\/+$/, "") + "/images";
