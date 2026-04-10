@@ -61,11 +61,19 @@ export function buildBlockBar(percent: number): string {
   return `<span class="bar-filled">${filledStr}</span><span class="bar-empty">${emptyStr}</span>`;
 }
 
+export function humanizeKey(key: string): string {
+  let s = key.replace(/_/g, " ");
+  s = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  s = s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function renderAdvancedTable(obj: Record<string, unknown>): string {
   let html = `<div class="adv-table">`;
   for (const [key, value] of Object.entries(obj)) {
     const displayVal = formatAdvancedValue(value);
-    html += `<div class="adv-row"><span class="adv-key">${escapeHtml(key)}</span><span class="adv-val">${displayVal}</span></div>`;
+    const label = humanizeKey(key);
+    html += `<div class="adv-row"><span class="adv-key">${escapeHtml(label)}</span><span class="adv-val">${displayVal}</span></div>`;
   }
   html += `</div>`;
   return html;
@@ -89,7 +97,7 @@ export function formatAdvancedValue(value: unknown): string {
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.length <= 5) {
-      return entries.map(([k, v]) => `<span class="adv-nested-key">${escapeHtml(k)}:</span> ${formatAdvancedValue(v)}`).join(", ");
+      return entries.map(([k, v]) => `<span class="adv-nested-key">${escapeHtml(humanizeKey(k))}:</span> ${formatAdvancedValue(v)}`).join(", ");
     }
     return escapeHtml(`{${entries.length} fields}`);
   }
@@ -113,7 +121,7 @@ export function renderMetaObject(obj: Record<string, unknown>, prefix = ""): HTM
 
     const keyEl = document.createElement("span");
     keyEl.className = "adv-key";
-    keyEl.textContent = fullKey;
+    keyEl.textContent = humanizeKey(fullKey);
 
     const valEl = document.createElement("span");
     valEl.className = "adv-val";

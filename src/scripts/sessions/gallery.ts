@@ -416,7 +416,15 @@ async function openFrameMetadata(frameIndex: number) {
   if (!frameMetaTitle || !frameMetaContent || !frameMetaOverlay) return;
 
   frameMetaTitle.textContent = `Frame #${frameIndex}`;
-  frameMetaContent.innerHTML = `<span class="spinner"></span> Loading metadata\u2026`;
+  frameMetaContent.innerHTML = `
+    <div class="frame-meta-loading">
+      <svg viewBox="0 0 24 24" width="32" height="32">
+        <circle cx="12" cy="12" r="10" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="2.5"/>
+        <circle cx="12" cy="12" r="10" fill="none" stroke="rgba(109,93,252,0.7)" stroke-width="2.5" stroke-dasharray="31.4 31.4" stroke-linecap="round">
+          <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.7s" repeatCount="indefinite"/>
+        </circle>
+      </svg>
+    </div>`;
   frameMetaOverlay.classList.remove("hidden");
 
   try {
